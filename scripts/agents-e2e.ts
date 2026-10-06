@@ -56,7 +56,7 @@ async function movePrice(symbol: string, factor: number) {
     if (cur === target) return;
     const step = cur / 10n;
     const next = target > cur ? (cur + step < target ? cur + step : target) : cur - step > target ? cur - step : target;
-    const now = Math.max(Math.floor(Date.now() / 1000), Number(m.priceTime));
+    const now = Math.max(Math.floor(Date.now() / 1000), Number(m.priceTime) + 1);
     await kp.methods
       .pushPrice(new BN(next.toString()), new BN(now), true)
       .accountsPartial({ keeper: keeper.publicKey, protocol: protocolPda, market })
@@ -68,7 +68,7 @@ async function movePrice(symbol: string, factor: number) {
 async function openSession(symbol: string) {
   const { market } = marketAccounts(symbol);
   const m = await (kp.account as any).market.fetch(market);
-  const now = Math.max(Math.floor(Date.now() / 1000), Number(m.priceTime));
+  const now = Math.max(Math.floor(Date.now() / 1000), Number(m.priceTime) + 1);
   await kp.methods
     .pushPrice(m.priceE8, new BN(now), true)
     .accountsPartial({ keeper: keeper.publicKey, protocol: protocolPda, market })

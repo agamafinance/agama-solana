@@ -30,7 +30,7 @@ until solana -u $SOLANA_RPC cluster-version >/dev/null 2>&1; do sleep 1; done
 solana -u $SOLANA_RPC airdrop 100 "$(solana-keygen pubkey "$ADMIN")" >/dev/null
 solana -u $SOLANA_RPC airdrop 10 "$(solana-keygen pubkey "$TX")" >/dev/null
 echo "== setup"
-ANCHOR_WALLET=$ADMIN ./node_modules/.bin/tsx scripts/setup.ts 2>&1 | grep -v "punycode\|trace-deprecation\|bigint" | grep -E "add_market|cre|done|Error" | head -20
+CRE_TRANSMITTER=$(solana-keygen pubkey "$TX") ANCHOR_WALLET=$ADMIN ./node_modules/.bin/tsx scripts/setup.ts 2>&1 | grep -v "punycode\|trace-deprecation\|bigint" | grep -E "add_market|cre|done|Error" | head -20
 echo "== cre workflow simulate --broadcast"
 cd cre
 cat > .env <<ENV

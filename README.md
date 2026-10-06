@@ -22,12 +22,11 @@ flowchart TB
     subgraph app["AGAMA APP"]
         EARN["Earn<br/>deposit the stock, get more stock"]
         AMP["Amplify<br/>loop the stock to the LTV ceiling"]
-        LEND["Lend<br/>supply USDC, earn the borrow rate"]
     end
 
     subgraph program["AGAMA PROGRAM (one Anchor program)"]
         POS["Position PDA<br/>one per owner, market and product<br/>the borrower of record"]
-        MKT["Market PDA x4<br/>TSLA / NVDA / AAPL / SPY<br/>LTV, threshold, off-hours buffer, price"]
+        MKT["Market PDA x10<br/>9 xStocks + GLDY<br/>LTV, threshold, off-hours buffer, price"]
         POOL["Lending pool<br/>USDC, kinked rate, LP token"]
         VAULT["Agama private credit vault<br/>NAV per share, the Earn buffer"]
         PROTO["Protocol PDA<br/>signs for the pool, the vault,<br/>every custody and mint"]
@@ -44,8 +43,7 @@ flowchart TB
     USER --> app
     EARN --> POS
     AMP --> POS
-    LEND --> POOL
-    LENDERS --> LEND
+    LENDERS --> POOL
     POS -->|"stock as collateral"| MKT
     POOL -->|"borrow USDC"| POS
     POS -->|"borrowed USDC"| VAULT
@@ -61,7 +59,7 @@ flowchart TB
     classDef bot fill:#fff7ed,stroke:#f97316,color:#c2410c
 
     class USER,LENDERS actor
-    class EARN,AMP,LEND product
+    class EARN,AMP product
     class POS,MKT,POOL,VAULT,PROTO core
     class KEEPER,JUP oracle
     class AGENTS bot
@@ -79,15 +77,15 @@ flowchart TB
   carries an LTV of `(L - 1) / L`, so the market's own LTV is the ceiling
   (1.43x on TSLA and NVDA, 1.54x on AAPL, 2x on SPY). The agents hold the
   multiple both ways.
-- **Lend.** Supply USDC, receive the pool's LP token, earn the kinked borrow
-  rate.
+- **Lend.** The pool is seeded by the protocol on devnet; the app no longer
+  has a Lend tab, the `supply` / `withdraw` instructions remain.
 - **The buffer goes before the liquidator.** `liquidate` first repays out of
   the position's vault shares; only if that does not restore health does the
   liquidator repay half the debt and take stock at a 5% bonus.
 - **Priced by Chainlink CRE, around the clock, honestly.** A CRE workflow
   prices every market (see below). In NYSE session it takes the share price;
   outside it, the xStock token's own price on Solana, flagged off-hours so LTV
-  and threshold both tighten by 5 points. A price can move 15% at most per
+  and threshold both tighten by 5 points. A price moves 15% at most per
   update, publish times only move forward, and only a stale price stops a
   borrow.
 - **No buttons for the automation.** Every position records which agent last
@@ -107,7 +105,8 @@ oracle, so an agent has nothing to choose and nothing to skim.
 ## Chainlink CRE: prices and agents
 
 Two Chainlink Runtime Environment workflows run the protocol. `agama-prices`
-prices the markets; `agama-agents` runs the agents. No keeper is left.
+prices the markets; `agama-agents` runs the agents. The keeper script stays
+only as a fallback anyone can run.
 
 ### agama-prices
 
@@ -135,34 +134,55 @@ cron, every minute
   Solana; access is requested. The workflow will fetch them as the primary
   price, with the current sources as the cross-check.
 - **The receiver checks who is calling.** `on_report` requires the configured
-  forwarder state, the forwarder's authority PDA for this program as signer,
-  and, once set, the workflow owner from the report metadata. Then it decodes
-  the Borsh `PriceReport` and prices the markets listed after `cre` in the
-  accounts, with the same `apply_price` the keeper used.
+  forwarder state and the forwarder's authority PDA for this program as signer.
+  On the live Keystone Forwarder that proves the DON signed, not whose
+  workflow it was, so production mode (`set_cre`) refuses to start without the
+  workflow owner and name, both checked against the metadata. The CLI's mock
+  forwarder relays anything without signatures, so in simulation mode the
+  receiver reads the instructions sysvar and only accepts a report whose
+  transaction was signed by the trusted transmitter (the key running the
+  simulator). Then it decodes the Borsh `PriceReport` and prices the markets
+  listed after `cre` and the sysvar, with the same `apply_price` the keeper
+  uses.
+- **Bounds that hold over time.** A publish time must be strictly newer than
+  the last one (a symbol repeated in a report, or two reports in one slot,
+  cannot compound the bound) and at most 15 s ahead. A move larger than 15%
+  is not refused, which would freeze the market for good after an earnings gap:
+  the price steps 15% toward it per update and converges.
 - **One bad price does not sink the report.** A price older than the one
-  already there, or past the 15% bound, is skipped with a `PriceSkipped` event;
-  the other markets of the report still update.
-- **Three markets per report.** A Solana transaction leaves the forwarder about
-  265 bytes once its accounts are paid, and every market is another account.
-- **Why a heartbeat.** On devnet the first write of a run went out minutes after
-  the trigger and never landed, three runs out of three. The run now opens with
-  an empty report that only stamps `cre.last_report_at`, which doubles as the
-  liveness the app shows.
+  already there, or a market the report names without passing it, is skipped
+  with a `PriceSkipped` event; the other markets of the report still update.
+- **Prices carry their source's time.** A share price is stamped with its last
+  print, gold spot with its own time; only the 24/7 token price is stamped
+  with the DON's clock. A source counts only when a majority of nodes read it,
+  so a node's failed read (a 0) cannot drag a median.
+- **Three markets per report.** A CRE Solana write leaves the receiver 265
+  bytes, less 32 per account it lists (cre, the sysvar, each market); a price
+  update is 25 bytes. The workflow refuses a `marketsPerReport` that would not
+  fit.
+- **The heartbeat is a simulator workaround, said as such.** Through the
+  simulator on devnet, the first write of a run went out late and did not land,
+  three runs out of three. Each run now opens with an empty report. It stamps
+  `cre.last_report_at`, never `last_price_at`: only an applied price counts as
+  liveness, and that is what the app shows.
 - **Where it runs today.** The organisation is still gated for CRE deploys, so
   the workflow runs through the CRE simulator (`cre/run-devnet.sh`, every
   minute under launchd), which executes the same WASM, does the same HTTP and
   consensus steps, and broadcasts through Chainlink's **mock** forwarder on
-  devnet. The mock does not verify DON signatures and the simulator puts a
-  placeholder workflow owner in the metadata, so until the DON runs it, reports
-  are trusted only as far as the per-update bounds. With Deploy Access:
+  devnet. The mock does not verify DON signatures, so the receiver trusts the
+  transmitter instead (see above), and the simulator puts a placeholder owner
+  (`0xaaaa...`) in the metadata, so owner pinning only means something on the
+  DON. Chainlink's answer for hackathons is exactly this path; deploying
+  to testnet or mainnet is a commercial agreement. With Deploy Access:
   `cre workflow deploy agama-prices --target production-settings`, then
-  `CRE_MODE=production CRE_WORKFLOW_OWNER=0x... pnpm setup` points the receiver
-  at the live Keystone Forwarder and pins the owner.
+  `CRE_MODE=production CRE_WORKFLOW_OWNER=0x... CRE_WORKFLOW_NAME=... pnpm setup`.
 - **Tested against Chainlink's own forwarder.** The LiteSVM suite loads the mock
   forwarder program (dumped from devnet by `scripts/fetch-fixtures.sh`) and
-  sends real reports through it: prices applied, a 20% jump skipped while the
-  rest of the report lands, a stale report skipped, another workflow owner, a
-  forged `forwarder_authority` and a market missing from the accounts refused.
+  sends real reports through it: prices applied, a 20% jump stepped to 15%
+  while the rest of the report lands, a stale report and a repeated symbol
+  skipped, another workflow owner, an untrusted transmitter and a forged
+  `forwarder_authority` refused, production mode refused without owner and
+  name.
   `cre/simulate-local.sh` runs the whole workflow against a local validator
   with the forwarder cloned in.
 
@@ -193,7 +213,7 @@ and `push_price` as a fallback price path, bounded the same way.
 
 ## Confidential balances
 
-Every token Agama mints (USDC, the four stocks, the LP token) is a Token-2022
+Every token Agama mints (USDC, the nine xStocks, GLDY, the LP token) is a Token-2022
 mint with the **confidential transfer extension**. A holder can move any of
 them into an encrypted balance and send them to anyone without the amount ever
 appearing on chain: balances and transfer amounts are ElGamal ciphertexts, and
@@ -204,7 +224,7 @@ are checked on chain by Solana's ZK ElGamal proof program.
 |---|---|---|
 | What you hold of each token | | encrypted, only your keys read it |
 | Sending to someone else | | amount hidden from everyone but the two of you |
-| Depositing into Earn, Amplify, Lend | amount visible | |
+| Depositing into Earn, Amplify | amount visible | |
 | What comes back on close or withdraw | amount visible, then shielded again | |
 | Positions (collateral, debt, target) | program state, readable by anyone | |
 
@@ -216,8 +236,9 @@ add one later.
 - **Keys.** Derived from one wallet signature over `solana-conf-bal/v1`, the
   standard every Token-2022 client uses, so the same wallet reads the same
   balances in any app.
-- **Cost.** Shielding is two transactions (deposit, apply). A private send
-  is five and an unshield four: the range and equality proofs do not fit in one
+- **Cost.** Shielding is one transaction (deposit and apply together, the new
+  readable balance computed client-side; two the first time a token is set
+  up). A private send is five and an unshield four: the range and equality proofs do not fit in one
   transaction, so they are verified into context accounts first and closed
   afterwards, rent back.
 - **Rounding never reaches the wallet.** A holder whose USDC is all private has
@@ -236,7 +257,7 @@ and checked exactly.
 
 | | |
 |---|---|
-| Status | Live on devnet: Token-2022 with confidential balances. The deployed bytes match a build of this branch. |
+| Status | Live on devnet: Token-2022 with confidential balances, priced and run by Chainlink CRE. At each deploy the on-chain bytes were dumped and compared to the local build. |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) (devnet) |
 | Every address | [`deployments/devnet.json`](deployments/devnet.json) |
 | IDL | [`idl/agama_solana.json`](idl/agama_solana.json) |
@@ -291,13 +312,14 @@ publish time, staleness, off-hours terms); the slider.
 
 ## The app
 
-`web/` is the Agama app shell with Solana as its platform: Earn, Amplify, Lend,
-Portfolio and a one-transaction Faucet under `/solana`, for Phantom, Solflare,
-Backpack or any injected wallet. `cd web && pnpm dev` serves it on
-http://localhost:3031/solana. `web/scripts/ui-e2e.mjs` drives it in a headless
-browser with a throwaway signer, every click a real devnet transaction: faucet,
-Earn open, the slider, Amplify open and close, Lend supply and withdraw, Earn
-close.
+`web/` is the Agama app with Solana as its platform: Portfolio, Earn, Amplify
+and a Faucet under `/solana`, for Phantom, Solflare, Backpack or any injected
+wallet. **Private by default**: one signature unlocks the confidential keys,
+the faucet's tokens are shielded as they land, a deposit unshields exactly
+what it needs right before it, and whatever a close returns is shielded again.
+`cd web && pnpm dev` serves it on http://localhost:3031/solana.
+`web/scripts/ui-e2e.mjs` drives it in a headless browser with a throwaway
+signer, every click a real devnet transaction.
 
 ## Instructions
 
@@ -305,7 +327,7 @@ close.
 |---|---|---|
 | `initialize`, `add_market`, `set_params`, `set_market` | admin | Protocol, mints, pool and vault accounts; markets and their terms |
 | `on_report` | Chainlink Keystone Forwarder | CRE price reports, a few markets each; bounded |
-| `set_cre` | admin | Forwarder program and state, workflow owner, simulation flag |
+| `set_cre` | admin | Forwarder program and state; owner and name (production) or trusted transmitter (simulation) |
 | `push_price` | keeper | Fallback price path; same bounds |
 | `faucet_usdc`, `faucet_stock` | anyone | Devnet funds |
 | `supply`, `withdraw` | lender | USDC in and out of the pool, LP token |

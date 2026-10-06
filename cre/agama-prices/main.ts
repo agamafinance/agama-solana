@@ -158,6 +158,7 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 		out[`${m.symbol}_b`] = 0
 		out[`${m.symbol}_t`] = 0
 		out[`${m.symbol}_d`] = 0
+		out[`${m.symbol}_g`] = 0 // gold spot publish time
 	}
 	// Each source on its own: one failing must not take the others down.
 	if (xs.length) {
@@ -193,11 +194,15 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 	}
 	if (golds.length) {
 		let spot = 0
+		let spotTime = 0
 		try {
-			spot = Number(get(req, config.goldSpotUrl).price) || 0
+			const g = get(req, config.goldSpotUrl)
+			spot = Number(g.price) || 0
+			spotTime = g.updatedAt ? Math.floor(Date.parse(g.updatedAt) / 1000) : 0
 		} catch {}
 		for (const m of golds) {
 			out[`${m.symbol}_b`] = spot // gold spot, per ounce
+			out[`${m.symbol}_g`] = spotTime
 			try {
 				// tokenA = USDC (6 decimals), tokenB = GLDY (9): sqrt_price is Q64.64 of raw B per raw A.
 				const sqrt = Number(whirlpoolSqrtPrice(req, config.mainnetRpc, m.orcaPool)) / 2 ** 64
@@ -206,6 +211,7 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 			} catch {}
 		}
 	}
+	for (const m of config.markets) for (const k of ['a', 'b', 'd']) out[`${m.symbol}_${k}_ok`] = out[`${m.symbol}_${k}`] > 0 ? 1 : 0
 	return out
 }
 
@@ -213,17 +219,22 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 // The DON's decision, from the agreed observation.
 // ---------------------------------------------------------------------------
 
-function decide(config: Config, obs: Observation, now: Date, skipped: string[]): { symbol: string; price: number; open: boolean; source: string }[] {
+type Decision = { symbol: string; price: number; open: boolean; source: string; at: number }
+
+function decide(config: Config, obs: Observation, now: Date, skipped: string[]): Decision[] {
 	const nowS = Math.floor(now.getTime() / 1000)
-	const out = []
+	const out: Decision[] = []
+	// A source counts only if a majority of nodes read it: a node that could
+	// not read a source reports 0, and those zeros must not drag a median.
+	const seen = (k: string) => (obs[`${k}_ok`] ?? 0) > 0.5
 	for (const m of config.markets) {
-		const a = obs[`${m.symbol}_a`]
-		const b = obs[`${m.symbol}_b`]
+		const a = seen(`${m.symbol}_a`) ? obs[`${m.symbol}_a`] : 0
+		const b = seen(`${m.symbol}_b`) ? obs[`${m.symbol}_b`] : 0
 		if (m.kind === 'xstock') {
 			// The token's price from two independent sources: Jupiter and the
 			// deepest DEX pair. Apart by more than the band, nobody is trusted
 			// this run and the market keeps its last price.
-			const d = obs[`${m.symbol}_d`]
+			const d = seen(`${m.symbol}_d`) ? obs[`${m.symbol}_d`] : 0
 			let token = 0
 			let tokenSource = ''
 			if (a > 0 && d > 0) {
@@ -240,13 +251,17 @@ function decide(config: Config, obs: Observation, now: Date, skipped: string[]):
 			const shareFresh = b > 0 && nowS - obs[`${m.symbol}_t`] < config.shareMaxAge
 			// In session the share price leads, as long as the token agrees with it.
 			const shareAgrees = shareFresh && Math.abs(b / token - 1) * 10_000 <= 3 * config.sourceMaxDeviationBps / 2
-			if (nyseOpen(now) && shareAgrees) out.push({ symbol: m.symbol, price: b, open: true, source: `share, token ${tokenSource}` })
-			else out.push({ symbol: m.symbol, price: token, open: false, source: `token, ${tokenSource}` })
+			// Stamped with the source's own time: a share price is as old as its
+			// last print, the token trades now.
+			if (nyseOpen(now) && shareAgrees)
+				out.push({ symbol: m.symbol, price: b, open: true, source: `share, token ${tokenSource}`, at: Math.min(nowS, obs[`${m.symbol}_t`]) })
+			else out.push({ symbol: m.symbol, price: token, open: false, source: `token, ${tokenSource}`, at: nowS })
 		} else {
 			const open = goldOpen(now)
 			const near = a > 0 && b > 0 && Math.abs(a / b - 1) * 10_000 <= config.goldMaxDeviationBps
-			if (near) out.push({ symbol: m.symbol, price: a, open, source: 'Orca pool' })
-			else if (b > 0) out.push({ symbol: m.symbol, price: b, open, source: 'gold spot' })
+			const spotAt = obs[`${m.symbol}_g`] > 0 ? Math.min(nowS, obs[`${m.symbol}_g`]) : nowS
+			if (near) out.push({ symbol: m.symbol, price: a, open, source: 'Orca pool', at: nowS })
+			else if (b > 0 && nowS - spotAt < config.shareMaxAge) out.push({ symbol: m.symbol, price: b, open, source: 'gold spot', at: spotAt })
 		}
 	}
 	return out
@@ -268,7 +283,9 @@ const onCron = (runtime: Runtime<Config>) => {
 	const now = runtime.now()
 
 	const fields = Object.fromEntries(
-		config.markets.flatMap((m) => ['a', 'b', 't', 'd'].map((k) => [`${m.symbol}_${k}`, median<number>])),
+		config.markets.flatMap((m) =>
+			['a', 'b', 't', 'd', 'g', 'a_ok', 'b_ok', 'd_ok'].map((k) => [`${m.symbol}_${k}`, median<number>]),
+		),
 	)
 	let obs: Observation
 	try {
@@ -290,20 +307,31 @@ const onCron = (runtime: Runtime<Config>) => {
 	const agama = new AgamaSolana(new SolanaClient(network.chainSelector.selector), sol.receiverProgramId)
 
 	const authority = pda([enc('forwarder'), new PublicKey(sol.forwarderState).toBytes(), new PublicKey(sol.receiverProgramId).toBytes()], sol.forwarderProgramId)
-	const cre = pda([enc('cre.v2')], sol.receiverProgramId)
+	const cre = pda([enc('cre.v3')], sol.receiverProgramId)
+	const SYSVAR_INSTRUCTIONS = 'Sysvar1nstructions1111111111111111111111111'
 	const market = (symbol: string) =>
 		pda([enc('market.v2'), pda([enc('stock.v2'), symbolBytes(symbol)], sol.receiverProgramId).toBytes()], sol.receiverProgramId)
 
-	const publishTime = BigInt(Math.floor(now.getTime() / 1000))
+	// A Solana write leaves the receiver 265 bytes, less 32 per account it
+	// lists (cre, the instructions sysvar, the markets); a price update is 25.
+	const n = config.marketsPerReport
+	if (4 + 25 * n > 265 - 32 * (2 + n) - (2 + n)) throw new Error(`marketsPerReport ${n} does not fit a Solana report`)
 	const sigs: string[] = []
 
-	// A heartbeat first: an empty report that only stamps `cre.last_report_at`.
-	// On devnet the first write of a run is consistently the one that does not
-	// land (it goes out minutes after the trigger), so it should carry no price.
+	// A heartbeat first: an empty report. It stamps `cre.last_report_at` but
+	// not `last_price_at` (only an applied price does), so it cannot pass for
+	// liveness. It is there because, through the simulator on devnet, the
+	// first write of a run went out late and did not land three runs in a row:
+	// a workaround for the simulator, said as such.
 	const beat = agama.writeReportFromPriceReport(
 		runtime,
 		{ updates: [] },
-		[solanaAccountMeta(sol.forwarderState, true), solanaAccountMeta(authority.toBase58()), solanaAccountMeta(cre.toBase58(), true)],
+		[
+			solanaAccountMeta(sol.forwarderState, true),
+			solanaAccountMeta(authority.toBase58()),
+			solanaAccountMeta(cre.toBase58(), true),
+			solanaAccountMeta(SYSVAR_INSTRUCTIONS),
+		],
 		{ computeLimit: 100_000 },
 	)
 	runtime.log(`heartbeat ${beat.txStatus === SolanaTxStatus.SUCCESS ? 'ok' : `missed: ${String(beat.errorMessage).slice(0, 80)}`}`)
@@ -312,13 +340,14 @@ const onCron = (runtime: Runtime<Config>) => {
 		const updates: PriceUpdate[] = group.map((d) => ({
 			symbol: Array.from(symbolBytes(d.symbol)),
 			priceE8: BigInt(Math.round(d.price * 1e8)),
-			publishTime,
+			publishTime: BigInt(d.at),
 			sessionOpen: d.open,
 		}))
 		const accounts: SolanaAccountMeta[] = [
 			solanaAccountMeta(sol.forwarderState, true),
 			solanaAccountMeta(authority.toBase58()),
 			solanaAccountMeta(cre.toBase58(), true),
+			solanaAccountMeta(SYSVAR_INSTRUCTIONS),
 			...group.map((d) => solanaAccountMeta(market(d.symbol).toBase58(), true)),
 		]
 		const resp = agama.writeReportFromPriceReport(runtime, { updates }, accounts, { computeLimit: 200_000 })

@@ -46,6 +46,7 @@ dependencies = [
  "anchor-spl",
  "litesvm",
  "sha2 0.10.9",
+ "solana-instructions-sysvar",
  "solana-keypair",
  "solana-message",
  "solana-signer",

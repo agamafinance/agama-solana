@@ -2026,10 +2026,10 @@ export type AgamaSolana = {
     {
       "name": "onReport",
       "docs": [
-        "The Chainlink CRE receiver. The Keystone Forwarder calls this after",
-        "verifying the DON's signatures; the markets to price follow `cre` in the",
-        "accounts. Same bounds as the keeper: CRE replaces who brings the price,",
-        "not what a price is allowed to do."
+        "The Chainlink CRE receiver. The forwarder calls this after verifying",
+        "the DON's signatures (the mock forwarder after nothing: then the",
+        "transmitter is checked instead). The markets to price follow `cre` and",
+        "the instructions sysvar in the accounts. Same bounds as the keeper."
       ],
       "discriminator": [
         214,
@@ -2062,11 +2062,18 @@ export type AgamaSolana = {
                   101,
                   46,
                   118,
-                  50
+                  51
                 ]
               }
             ]
           }
+        },
+        {
+          "name": "instructions",
+          "docs": [
+            "to check who transmitted the report."
+          ],
+          "address": "Sysvar1nstructions1111111111111111111111111"
         }
       ],
       "args": [
@@ -2413,7 +2420,7 @@ export type AgamaSolana = {
                   101,
                   46,
                   118,
-                  50
+                  51
                 ]
               }
             ]
@@ -2426,25 +2433,12 @@ export type AgamaSolana = {
       ],
       "args": [
         {
-          "name": "forwarderProgram",
-          "type": "pubkey"
-        },
-        {
-          "name": "forwarderState",
-          "type": "pubkey"
-        },
-        {
-          "name": "workflowOwner",
+          "name": "params",
           "type": {
-            "array": [
-              "u8",
-              20
-            ]
+            "defined": {
+              "name": "creParams"
+            }
           }
-        },
-        {
-          "name": "simulation",
-          "type": "bool"
         }
       ]
     },
@@ -3056,6 +3050,19 @@ export type AgamaSolana = {
       ]
     },
     {
+      "name": "badDebtWrittenOff",
+      "discriminator": [
+        236,
+        46,
+        22,
+        26,
+        81,
+        51,
+        171,
+        41
+      ]
+    },
+    {
       "name": "creReportReceived",
       "discriminator": [
         47,
@@ -3290,6 +3297,11 @@ export type AgamaSolana = {
       "code": 6025,
       "name": "marketNotInReport",
       "msg": "No market in the accounts for a symbol in the report"
+    },
+    {
+      "code": 6026,
+      "name": "invalidTransmitter",
+      "msg": "Simulation report not sent by the trusted transmitter"
     }
   ],
   "types": [
@@ -3378,6 +3390,22 @@ export type AgamaSolana = {
       }
     },
     {
+      "name": "badDebtWrittenOff",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "position",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "creConfig",
       "docs": [
         "Where Chainlink CRE reports may come from. The Keystone Forwarder verifies",
@@ -3400,7 +3428,8 @@ export type AgamaSolana = {
             "name": "workflowOwner",
             "docs": [
               "EVM-style address of the workflow owner, as CRE puts it in the",
-              "metadata. All zero accepts any owner."
+              "metadata. Required outside simulation: the Keystone Forwarder proves",
+              "the DON signed a report, not which customer's workflow produced it."
             ],
             "type": {
               "array": [
@@ -3410,12 +3439,30 @@ export type AgamaSolana = {
             }
           },
           {
+            "name": "workflowName",
+            "docs": [
+              "The workflow name as CRE puts it in the metadata (10 bytes). Pinned",
+              "with the owner outside simulation."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                10
+              ]
+            }
+          },
+          {
             "name": "simulation",
             "docs": [
-              "True while the forwarder is the CLI's mock: it relays without checking",
-              "signatures, so reports are only as trusted as the per-push bounds."
+              "True while the forwarder is the CLI's mock, which relays anything",
+              "without checking signatures. Reports are then accepted only when the",
+              "transaction's transmitter (the key running the simulator) is this one."
             ],
             "type": "bool"
+          },
+          {
+            "name": "transmitter",
+            "type": "pubkey"
           },
           {
             "name": "bump",
@@ -3428,6 +3475,55 @@ export type AgamaSolana = {
           {
             "name": "lastReportAt",
             "type": "i64"
+          },
+          {
+            "name": "lastPriceAt",
+            "docs": [
+              "Last time a report actually moved a price: the liveness the app shows."
+            ],
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "creParams",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "forwarderProgram",
+            "type": "pubkey"
+          },
+          {
+            "name": "forwarderState",
+            "type": "pubkey"
+          },
+          {
+            "name": "workflowOwner",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "workflowName",
+            "type": {
+              "array": [
+                "u8",
+                10
+              ]
+            }
+          },
+          {
+            "name": "simulation",
+            "type": "bool"
+          },
+          {
+            "name": "transmitter",
+            "type": "pubkey"
           }
         ]
       }

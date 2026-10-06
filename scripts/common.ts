@@ -52,7 +52,7 @@ export const CRE_FORWARDERS = {
   simulation: { program: "7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK", state: "5Tipz3yhTBdVsDbaBxZkrp7Gjf3brGq5SKkxReefPMP7" },
   production: { program: "CXsKEJcs25TQEYU2e5jZ8QTPE3ffMLZhH6BWHrdcCCB5", state: "8QoomCQyPSkJ8WopJbX9B4HyvrFzziwvJdU8hZE6DCr9" },
 } as const;
-export const crePda = pda(seed("cre.v2"));
+export const crePda = pda(seed("cre.v3"));
 
 export function marketAccounts(symbol: string) {
   const stockMint = pda(seed("stock.v2"), Buffer.from(symbolBytes(symbol)));
@@ -187,7 +187,14 @@ export async function sendReliably(
       const st = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
       if (st?.err) throw new Error(`${sig} failed: ${JSON.stringify(st.err)}`);
       if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") return sig;
-      if ((await conn.getBlockHeight("confirmed")) > lastValidBlockHeight) break;
+      if ((await conn.getBlockHeight("confirmed")) > lastValidBlockHeight) {
+        // It may have landed between the two reads: look once more before
+        // signing it again, or it would run twice.
+        const again = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
+        if (again?.err) throw new Error(`${sig} failed: ${JSON.stringify(again.err)}`);
+        if (again?.confirmationStatus) return sig;
+        break;
+      }
       await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
     }
   }

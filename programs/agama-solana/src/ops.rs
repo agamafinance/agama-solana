@@ -302,8 +302,13 @@ pub fn earn_move(
         Ok(Some((OP_BORROWED_MORE, extra)))
     } else if debt > wanted + band {
         let want = to_u64(debt - wanted)?;
+        // No buffer left to repay from: nothing this move can do without
+        // selling stock, which Earn never does. Not an error, or a top-up or a
+        // lower target would be refused right when the position needs it.
         let paid = repay_from_buffer(p, m, pos, pipes, want)?;
-        require!(paid > 0, AgamaError::NothingToDeleverage);
+        if paid == 0 {
+            return Ok(None);
+        }
         Ok(Some((OP_REPAID_FROM_YIELD, paid)))
     } else {
         Ok(None)

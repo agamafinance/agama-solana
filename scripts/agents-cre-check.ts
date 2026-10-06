@@ -19,7 +19,7 @@ async function prepare() {
   const t = marketAccounts("TSLA");
   const keeper = programFor(keeperKeypair(), conn);
   const m: any = await (keeper.account as any).market.fetch(t.market);
-  const now = Math.max(Math.floor(Date.now() / 1000), Number(m.priceTime));
+  const now = Math.max(Math.floor(Date.now() / 1000), Number(m.priceTime) + 1);
   await keeper.methods.pushPrice(m.priceE8, new BN(now), true).accountsPartial({ keeper: keeperKeypair().publicKey, protocol: protocolPda, market: t.market }).rpc();
   const f = await p.methods.faucetStock().accountsPartial({ user: user.publicKey, protocol: protocolPda, market: t.market, stockMint: t.stockMint, userStock: ata(user.publicKey, t.stockMint), ...sys }).instruction();
   await p.methods

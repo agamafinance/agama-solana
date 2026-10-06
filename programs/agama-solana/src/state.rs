@@ -14,7 +14,9 @@ pub const STOCK_SEED: &[u8] = b"stock.v2";
 pub const MARKET_SEED: &[u8] = b"market.v2";
 pub const CUSTODY_SEED: &[u8] = b"custody.v2";
 pub const POSITION_SEED: &[u8] = b"position.v2";
-pub const CRE_SEED: &[u8] = b"cre.v2";
+/// `.v3`: CreConfig gained the workflow name, the trusted transmitter and
+/// `last_price_at`; the v2 account is left where it is.
+pub const CRE_SEED: &[u8] = b"cre.v3";
 pub const EARN_SEED: &[u8] = b"earn";
 pub const AMPLIFY_SEED: &[u8] = b"amplify";
 
@@ -254,14 +256,22 @@ pub struct CreConfig {
     pub forwarder_program: Pubkey,
     pub forwarder_state: Pubkey,
     /// EVM-style address of the workflow owner, as CRE puts it in the
-    /// metadata. All zero accepts any owner.
+    /// metadata. Required outside simulation: the Keystone Forwarder proves
+    /// the DON signed a report, not which customer's workflow produced it.
     pub workflow_owner: [u8; 20],
-    /// True while the forwarder is the CLI's mock: it relays without checking
-    /// signatures, so reports are only as trusted as the per-push bounds.
+    /// The workflow name as CRE puts it in the metadata (10 bytes). Pinned
+    /// with the owner outside simulation.
+    pub workflow_name: [u8; 10],
+    /// True while the forwarder is the CLI's mock, which relays anything
+    /// without checking signatures. Reports are then accepted only when the
+    /// transaction's transmitter (the key running the simulator) is this one.
     pub simulation: bool,
+    pub transmitter: Pubkey,
     pub bump: u8,
     pub reports: u64,
     pub last_report_at: i64,
+    /// Last time a report actually moved a price: the liveness the app shows.
+    pub last_price_at: i64,
 }
 
 /// One price in a CRE report.
@@ -290,23 +300,31 @@ impl Market {
         publish_time: i64,
         session_open: bool,
         now: i64,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         require!(price_e8 > 0, AgamaError::ZeroAmount);
+        // Strictly forward: the same publish time twice (a symbol repeated in a
+        // report, two reports in one slot) cannot compound the bound.
         require!(
-            publish_time <= now + crate::MAX_FUTURE_SKEW && publish_time >= self.price_time,
+            publish_time <= now + crate::MAX_FUTURE_SKEW && publish_time > self.price_time,
             AgamaError::BadPublishTime
         );
+        // A move larger than the bound is not refused (a 20% earnings gap would
+        // freeze the market for good): the price steps toward it, at most
+        // `max_jump_bps` per update, and converges in a few updates.
+        let mut price_e8 = price_e8;
         if self.price_e8 > 0 {
             let old = self.price_e8 as u128;
-            let diff = (price_e8 as u128).abs_diff(old);
-            require!(
-                diff * BPS <= old * self.max_jump_bps as u128,
-                AgamaError::PriceJumpTooLarge
-            );
+            let step = old * self.max_jump_bps as u128 / BPS;
+            let p = price_e8 as u128;
+            if p > old + step {
+                price_e8 = crate::math::to_u64(old + step)?;
+            } else if p + step < old {
+                price_e8 = crate::math::to_u64(old - step)?;
+            }
         }
         self.price_e8 = price_e8;
         self.price_time = publish_time;
         self.session_open = session_open;
-        Ok(())
+        Ok(price_e8)
     }
 }

@@ -54,4 +54,6 @@ pub enum AgamaError {
     InvalidReport,
     #[msg("No market in the accounts for a symbol in the report")]
     MarketNotInReport,
+    #[msg("Simulation report not sent by the trusted transmitter")]
+    InvalidTransmitter,
 }

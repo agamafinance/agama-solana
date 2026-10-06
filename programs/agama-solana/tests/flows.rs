@@ -843,11 +843,21 @@ fn the_price_layer_is_bounded() {
     // Not the keeper.
     let ix = w.push_ix(&tsla, alice.pubkey(), 401 * PX, now, true);
     err_has(w.send(&[ix], &alice), "NotKeeper");
-    // A jump past 15% in one push.
-    err_has(w.push(&tsla, 470 * PX, now, true), "PriceJumpTooLarge");
+    // The same publish time twice cannot compound the bound.
+    err_has(w.push(&tsla, 401 * PX, now, true), "BadPublishTime");
     // Publish time going backwards, or from the future.
     err_has(w.push(&tsla, 401 * PX, now - 1, true), "BadPublishTime");
-    err_has(w.push(&tsla, 401 * PX, now + 120, true), "BadPublishTime");
+    err_has(w.push(&tsla, 401 * PX, now + 30, true), "BadPublishTime");
+    // A jump past 15% is not refused (a gap would freeze the market): the
+    // price steps 15% toward it per update.
+    w.warp(1);
+    let now = w.now();
+    w.push(&tsla, 600 * PX, now, true).unwrap();
+    assert_eq!(w.market(&tsla).price_e8, 460 * PX);
+    w.warp(1);
+    let now = w.now();
+    w.push(&tsla, 400 * PX, now, true).unwrap();
+    assert_eq!(w.market(&tsla).price_e8, 400 * PX);
 
     // Stale: borrowing waits.
     w.warp(601);
@@ -965,6 +975,7 @@ fn close_never_needs_public_usdc_for_rounding() {
 // (the one `cre workflow simulate` uses), loaded from tests/fixtures.
 // ---------------------------------------------------------------------------
 
+const SYSVAR_IX: Pubkey = anchor_lang::pubkey!("Sysvar1nstructions1111111111111111111111111");
 const MOCK_FORWARDER: Pubkey = anchor_lang::pubkey!("7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK");
 
 fn sha256(b: &[u8]) -> [u8; 32] {
@@ -990,7 +1001,7 @@ struct Cre {
     cre: Pubkey,
 }
 
-fn setup_cre(w: &mut World, owner: [u8; 20]) -> Cre {
+fn setup_cre(w: &mut World, owner: [u8; 20], transmitter: Pubkey) -> Cre {
     w.svm
         .add_program_from_file(MOCK_FORWARDER, "tests/fixtures/mock_forwarder.so")
         .expect("run scripts/fetch-fixtures.sh first");
@@ -1027,10 +1038,14 @@ fn setup_cre(w: &mut World, owner: [u8; 20]) -> Cre {
         }
         .to_account_metas(None),
         data: instruction::SetCre {
-            forwarder_program: MOCK_FORWARDER,
-            forwarder_state: state.pubkey(),
-            workflow_owner: owner,
-            simulation: true,
+            params: agama_solana::CreParams {
+                forwarder_program: MOCK_FORWARDER,
+                forwarder_state: state.pubkey(),
+                workflow_owner: owner,
+                workflow_name: [0u8; 10],
+                simulation: true,
+                transmitter,
+            },
         }
         .data(),
     };
@@ -1059,7 +1074,7 @@ fn cre_report_ix(
     updates: Vec<PriceUpdate>,
 ) -> Instruction {
     let payload = anchor_lang::prelude::borsh::to_vec(&PriceReport { updates }).unwrap();
-    let mut keys = vec![c.state, c.authority, c.cre];
+    let mut keys = vec![c.state, c.authority, c.cre, SYSVAR_IX];
     keys.extend_from_slice(markets);
     let flat: Vec<u8> = keys.iter().flat_map(|k| k.to_bytes()).collect();
     let account_hash = sha256(&flat);
@@ -1085,6 +1100,7 @@ fn cre_report_ix(
         AccountMeta::new_readonly(agama_solana::ID, false),
         AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
         AccountMeta::new(c.cre, false),
+        AccountMeta::new_readonly(SYSVAR_IX, false),
     ];
     metas.extend(markets.iter().map(|m| AccountMeta::new(*m, false)));
     Instruction {
@@ -1101,8 +1117,8 @@ fn cre_reports_price_the_markets() {
     let mut w = World::new();
     let tsla = w.add_market("TSLA", 3_000, 4_000, 400 * PX);
     let gldy = w.add_market("GLDY", 6_000, 7_000, 4_150 * PX);
-    let c = setup_cre(&mut w, OWNER);
     let relayer = w.user();
+    let c = setup_cre(&mut w, OWNER, relayer.pubkey());
     w.warp(30);
     let now = w.now();
     let ix = cre_report_ix(
@@ -1153,7 +1169,8 @@ fn cre_reports_price_the_markets() {
         vec![up("TSLA", 492 * PX, now), up("GLDY", 4_170 * PX, now)],
     );
     w.send(&[ix], &relayer).unwrap();
-    assert_eq!(w.market(&tsla).price_e8, 410 * PX);
+    // Stepped 15% toward 492 from 410, not refused.
+    assert_eq!(w.market(&tsla).price_e8, 410 * PX * 115 / 100);
     assert_eq!(w.market(&gldy).price_e8, 4_170 * PX);
 
     // A report older than the price already there is skipped too: the keeper,
@@ -1176,8 +1193,10 @@ fn cre_reports_price_the_markets() {
 fn cre_refuses_what_did_not_come_from_our_workflow() {
     let mut w = World::new();
     let tsla = w.add_market("TSLA", 3_000, 4_000, 400 * PX);
-    let c = setup_cre(&mut w, OWNER);
+    let relayer = w.user();
+    let c = setup_cre(&mut w, OWNER, relayer.pubkey());
     let eve = w.user();
+    w.warp(1);
     let now = w.now();
     let upd = || {
         vec![PriceUpdate {
@@ -1189,8 +1208,13 @@ fn cre_refuses_what_did_not_come_from_our_workflow() {
     };
 
     // Another workflow owner, through the right forwarder.
-    let ix = cre_report_ix(&c, &eve.pubkey(), [0xcd; 20], &[tsla.market], upd());
-    err_has(w.send(&[ix], &eve), "InvalidWorkflowOwner");
+    let ix = cre_report_ix(&c, &relayer.pubkey(), [0xcd; 20], &[tsla.market], upd());
+    err_has(w.send(&[ix], &relayer), "InvalidWorkflowOwner");
+
+    // The mock forwarder relays anyone's report; in simulation the receiver
+    // only takes the ones our transmitter sent.
+    let ix = cre_report_ix(&c, &eve.pubkey(), OWNER, &[tsla.market], upd());
+    err_has(w.send(&[ix], &eve), "InvalidTransmitter");
 
     // Calling on_report directly, signing as forwarder_authority with a plain key.
     let fake = Keypair::new();
@@ -1201,6 +1225,7 @@ fn cre_refuses_what_did_not_come_from_our_workflow() {
         state: c.state,
         forwarder_authority: fake.pubkey(),
         cre: c.cre,
+        instructions: SYSVAR_IX,
     }
     .to_account_metas(None);
     accs.push(anchor_lang::solana_program::instruction::AccountMeta::new(
@@ -1218,9 +1243,126 @@ fn cre_refuses_what_did_not_come_from_our_workflow() {
     };
     err_has(w.send(&[ix], &fake), "InvalidForwarderAuthority");
 
-    // A report naming a market it did not pass.
-    let ix = cre_report_ix(&c, &eve.pubkey(), OWNER, &[], upd());
-    err_has(w.send(&[ix], &eve), "MarketNotInReport");
+    // A report naming a market it did not pass: skipped, the report lands.
+    let ix = cre_report_ix(&c, &relayer.pubkey(), OWNER, &[], upd());
+    w.send(&[ix], &relayer).unwrap();
 
-    assert_eq!(w.market(&tsla).price_e8, 400 * PX);
+    // The same symbol twice in one report cannot compound the bound: the
+    // second carries the same publish time and is skipped.
+    w.warp(1);
+    let now = w.now();
+    let twice = vec![
+        PriceUpdate {
+            symbol: sym("TSLA"),
+            price_e8: 460 * PX,
+            publish_time: now,
+            session_open: true,
+        },
+        PriceUpdate {
+            symbol: sym("TSLA"),
+            price_e8: 529 * PX,
+            publish_time: now,
+            session_open: true,
+        },
+    ];
+    let ix = cre_report_ix(&c, &relayer.pubkey(), OWNER, &[tsla.market], twice);
+    w.send(&[ix], &relayer).unwrap();
+    assert_eq!(w.market(&tsla).price_e8, 460 * PX);
+}
+
+#[test]
+fn production_cre_needs_owner_and_name_and_bad_params_are_refused() {
+    let mut w = World::new();
+    let admin = w.admin.insecure_clone();
+    let cre = pda(&[CRE_SEED]);
+    let protocol = w.protocol;
+    let set = |params: agama_solana::CreParams| Instruction {
+        program_id: agama_solana::ID,
+        accounts: accounts::SetCre {
+            admin: admin.pubkey(),
+            protocol,
+            cre,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None),
+        data: instruction::SetCre { params }.data(),
+    };
+    let base = agama_solana::CreParams {
+        forwarder_program: MOCK_FORWARDER,
+        forwarder_state: Pubkey::new_unique(),
+        workflow_owner: [0u8; 20],
+        workflow_name: [0u8; 10],
+        simulation: false,
+        transmitter: Pubkey::default(),
+    };
+    let ix = set(base.clone());
+    err_has(w.send(&[ix], &admin), "BadParams");
+    let ix = set(agama_solana::CreParams {
+        simulation: true,
+        ..base.clone()
+    });
+    err_has(w.send(&[ix], &admin), "BadParams");
+    let ix = set(agama_solana::CreParams {
+        workflow_owner: OWNER,
+        workflow_name: *b"agamaprice",
+        ..base
+    });
+    w.send(&[ix], &admin).unwrap();
+
+    // Closing the session must not make a position at the LTV liquidatable.
+    let mut symbol = [0u8; 8];
+    symbol[..3].copy_from_slice(b"BAD");
+    let stock_mint = pda(&[STOCK_SEED, &symbol]);
+    let market = pda(&[MARKET_SEED, stock_mint.as_ref()]);
+    let ix = Instruction {
+        program_id: agama_solana::ID,
+        accounts: accounts::AddMarket {
+            admin: admin.pubkey(),
+            protocol: w.protocol,
+            stock_mint,
+            market,
+            custody: pda(&[CUSTODY_SEED, market.as_ref()]),
+            token_program: anchor_spl::token_2022::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None),
+        data: instruction::AddMarket {
+            symbol,
+            params: MarketParams {
+                ltv_bps: 3_000,
+                lt_bps: 3_400,
+                liq_bonus_bps: 500,
+                offhours_buffer_bps: 500,
+                max_age: 600,
+                max_jump_bps: 1_500,
+            },
+        }
+        .data(),
+    };
+    err_has(w.send(&[ix], &admin), "BadParams");
+}
+
+#[test]
+fn bad_debt_is_written_off_not_carried() {
+    let mut w = World::new();
+    let nvda = w.add_market("NVDA", 3_000, 4_000, 180 * PX);
+    w.seed_pool(&nvda, 10);
+    let bob = w.user();
+    let liq = w.user();
+    w.faucet(&bob, &nvda);
+    w.faucet(&liq, &nvda);
+    w.amplify_open(&bob, &nvda, 10 * SHARE, 14_000).unwrap();
+    let pos = w.position_pda(&bob.pubkey(), &nvda, AMPLIFY_SEED);
+    // A crash deep enough that the collateral no longer covers the debt.
+    w.move_price(&nvda, 30 * PX);
+    for _ in 0..20 {
+        if w.position(&pos).collateral == 0 {
+            break;
+        }
+        w.liquidate(&liq, &nvda, pos, u64::MAX).unwrap();
+    }
+    let s = w.position(&pos);
+    assert_eq!(s.collateral, 0);
+    assert_eq!(s.scaled_debt, 0, "the remainder is written off");
+    assert_eq!(w.market(&nvda).total_scaled_debt, 0);
 }

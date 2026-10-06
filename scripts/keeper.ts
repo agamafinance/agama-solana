@@ -42,7 +42,7 @@ async function pushPrices() {
       if (target > cur + cap) target = cur + cap;
       if (target < cur - cap) target = cur - cap;
     }
-    const publishTime = Math.max(q.publishTime, Number(m.priceTime));
+    const publishTime = Math.max(q.publishTime, Number(m.priceTime) + 1);
     try {
       const ix = await program.methods
         .pushPrice(new BN(target.toString()), new BN(publishTime), q.sessionOpen)

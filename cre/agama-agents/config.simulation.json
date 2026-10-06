@@ -13,5 +13,6 @@
     "AMZN",
     "META",
     "GLDY"
-  ]
+  ],
+  "maxActions": 10
 }

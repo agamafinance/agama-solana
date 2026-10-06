@@ -5,12 +5,14 @@
 //   2. add_market   TSLA / NVDA / AAPL / SPY stand-ins, custody per market
 //   3. push_price   first price for each, from the live xStocks
 //   4. supply       seed the pool with faucet USDC so there is something to borrow
+import path from "path";
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   CRE_FORWARDERS,
   MARKETS,
+  ROOT,
   crePda,
   ata,
   connection,
@@ -162,20 +164,43 @@ async function main() {
       .rpc();
     console.log(`seeded pool with ${SEED_POOL_USDC} USDC`, sig);
   }
-  // Chainlink CRE: point the receiver at the forwarder. CRE_MODE=production
-  // switches to the live Keystone Forwarder once the workflow runs on the DON;
-  // CRE_WORKFLOW_OWNER (0x...) pins the workflow owner.
+  // Chainlink CRE: point the receiver at the forwarder.
+  //   simulation  the CLI's mock forwarder; reports are taken only from the
+  //               transmitter key that runs the simulator (CRE_TRANSMITTER,
+  //               default .keys/cre-transmitter.json)
+  //   production  the Keystone Forwarder; CRE_WORKFLOW_OWNER (0x...) and
+  //               CRE_WORKFLOW_NAME are required
   const mode = (process.env.CRE_MODE ?? "simulation") as keyof typeof CRE_FORWARDERS;
   const fwd = CRE_FORWARDERS[mode];
   const ownerHex = (process.env.CRE_WORKFLOW_OWNER ?? "").replace(/^0x/, "");
   const owner = ownerHex ? [...Buffer.from(ownerHex.padStart(40, "0"), "hex")] : new Array(20).fill(0);
+  const name = [...Buffer.concat([Buffer.from(process.env.CRE_WORKFLOW_NAME ?? ""), Buffer.alloc(10)]).subarray(0, 10)];
+  const transmitter =
+    mode === "simulation"
+      ? new PublicKey(process.env.CRE_TRANSMITTER ?? loadKeypair(path.join(ROOT, ".keys/cre-transmitter.json")).publicKey)
+      : PublicKey.default;
   const cur: any = await (program.account as any).creConfig.fetchNullable(crePda);
-  if (!cur || cur.forwarderProgram.toBase58() !== fwd.program || Buffer.from(cur.workflowOwner).toString("hex") !== Buffer.from(owner).toString("hex")) {
+  const same =
+    cur &&
+    cur.forwarderProgram.toBase58() === fwd.program &&
+    cur.forwarderState.toBase58() === fwd.state &&
+    cur.simulation === (mode === "simulation") &&
+    cur.transmitter.equals(transmitter) &&
+    Buffer.from(cur.workflowOwner).equals(Buffer.from(owner)) &&
+    Buffer.from(cur.workflowName).equals(Buffer.from(name));
+  if (!same) {
     const sig = await program.methods
-      .setCre(new PublicKey(fwd.program), new PublicKey(fwd.state), owner, mode === "simulation")
+      .setCre({
+        forwarderProgram: new PublicKey(fwd.program),
+        forwarderState: new PublicKey(fwd.state),
+        workflowOwner: owner,
+        workflowName: name,
+        simulation: mode === "simulation",
+        transmitter,
+      })
       .accountsPartial({ admin: admin.publicKey, protocol: protocolPda, cre: crePda, systemProgram: SystemProgram.programId })
       .rpc();
-    console.log(`cre: ${mode} forwarder, owner ${ownerHex || "any"}`, sig);
+    console.log(`cre: ${mode} forwarder, transmitter ${transmitter.toBase58().slice(0, 8)}, owner ${ownerHex || "any"}`, sig);
   } else console.log("cre configured");
   console.log("done");
 }
