@@ -3,7 +3,6 @@
   "jupiterUrl": "https://lite-api.jup.ag/price/v3",
   "dexscreenerUrl": "https://api.dexscreener.com/tokens/v1/solana",
   "sourceMaxDeviationBps": 200,
-  "mainnetRpc": "https://api.mainnet-beta.solana.com",
   "goldSpotUrl": "https://api.gold-api.com/price/XAU",
   "goldMaxDeviationBps": 300,
   "shareMaxAge": 120,
@@ -115,5 +114,9 @@
       }
     }
   ],
-  "dataStreamsUrl": "https://api.testnet-dataengine.chain.link"
+  "dataStreamsUrl": "https://api.testnet-dataengine.chain.link",
+  "mainnetRpcs": [
+    "https://api.mainnet-beta.solana.com",
+    "https://solana-rpc.publicnode.com"
+  ]
 }

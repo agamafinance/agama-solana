@@ -8,6 +8,12 @@
 set -eo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT/cre"
+# The failover RPC proxy the simulation target points at (launchd keeps it up
+# on this machine; start it here otherwise).
+if ! curl -s -m 2 -o /dev/null http://127.0.0.1:8910; then
+  nohup node "$ROOT/scripts/rpc-proxy.mjs" >/tmp/agama-rpc-proxy.log 2>&1 &
+  sleep 1
+fi
 {
   echo "CRE_SOLANA_PRIVATE_KEY=$(node -e "console.log(require('$ROOT/node_modules/.pnpm/bs58@4.0.1/node_modules/bs58').encode(Buffer.from(require('$ROOT/.keys/cre-transmitter.json'))))")"
   echo "CRE_AGENT_KEY=$(node -e "console.log(require('$ROOT/node_modules/.pnpm/bs58@4.0.1/node_modules/bs58').encode(Buffer.from(require('$ROOT/.keys/cre-agent.json'))))")"

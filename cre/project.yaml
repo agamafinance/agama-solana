@@ -1,10 +1,12 @@
 # CRE project settings. `simulation-settings` relays through Chainlink's mock
 # forwarder on devnet (`cre workflow simulate --broadcast`); `production-settings`
 # is the DON, through the live Keystone Forwarder on devnet.
+# Simulation writes go through scripts/rpc-proxy.mjs (started by run-devnet.sh):
+# one URL for the CLI, failing over across every free devnet endpoint.
 simulation-settings:
   rpcs:
     - chain-name: solana-devnet
-      url: https://api.devnet.solana.com
+      url: http://127.0.0.1:8910
 
 production-settings:
   rpcs:

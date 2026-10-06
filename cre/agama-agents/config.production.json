@@ -1,6 +1,5 @@
 {
   "schedule": "30 * * * * *",
-  "rpcUrl": "https://api.devnet.solana.com",
   "programId": "6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D",
   "markets": [
     "TSLA",
@@ -14,5 +13,10 @@
     "META",
     "GLDY"
   ],
-  "maxActions": 10
+  "maxActions": 10,
+  "rpcUrls": [
+    "https://rpc.magicblock.app/devnet",
+    "https://api.devnet.solana.com",
+    "https://devnet.rpcpool.com"
+  ]
 }

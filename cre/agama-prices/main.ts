@@ -63,8 +63,8 @@ const configSchema = z.object({
 	dexscreenerUrl: z.string(),
 	/** Two token sources further apart than this and the market is skipped this run. */
 	sourceMaxDeviationBps: z.number(),
-	/** Mainnet RPC: the GLDY price is read straight from Orca's whirlpool account. */
-	mainnetRpc: z.string(),
+	/** Mainnet RPCs, tried in order: the GLDY price is read straight from Orca's whirlpool account. */
+	mainnetRpcs: z.array(z.string()).min(1),
 	goldSpotUrl: z.string(),
 	/** Orca pool price is taken while within this many bps of spot. */
 	goldMaxDeviationBps: z.number(),
@@ -298,7 +298,14 @@ const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observati
 			out[`${m.symbol}_g`] = spotTime
 			try {
 				// tokenA = USDC (6 decimals), tokenB = GLDY (9): sqrt_price is Q64.64 of raw B per raw A.
-				const sqrt = Number(whirlpoolSqrtPrice(req, config.mainnetRpc, m.orcaPool)) / 2 ** 64
+				let raw = 0n
+				for (const rpc of config.mainnetRpcs) {
+					try {
+						raw = whirlpoolSqrtPrice(req, rpc, m.orcaPool)
+						break
+					} catch {}
+				}
+				const sqrt = Number(raw) / 2 ** 64
 				const gldyPerUsdc = sqrt * sqrt * 10 ** (6 - 9)
 				out[`${m.symbol}_a`] = gldyPerUsdc > 0 ? 1 / gldyPerUsdc : 0
 			} catch {}

@@ -13,8 +13,9 @@
 //      keeps one. The RPC preflight still refuses anything that turned out to
 //      have nothing to do, for free.
 //
-// HTTP calls per run: 3 reads + at most maxActions sends, under the 15 a CRE
-// execution allows.
+// HTTP calls: 3 reads in the first step and at most maxActions sends in the
+// last, each step under the 15 a CRE execution allows; a rate-limited RPC
+// fails over to the next of `rpcUrls` with whatever budget is left.
 //
 // Why not a signed report through the Keystone Forwarder, like the prices: an
 // agent action needs ten accounts, and a CRE Solana write has no address
@@ -40,7 +41,8 @@ import { z } from 'zod'
 
 const configSchema = z.object({
 	schedule: z.string(),
-	rpcUrl: z.string(),
+	/** Devnet RPCs, tried in order when one is rate limited or down. */
+	rpcUrls: z.array(z.string()).min(1),
 	programId: z.string(),
 	markets: z.array(z.string()),
 	maxActions: z.number(),
@@ -124,11 +126,32 @@ const i64 = (d: Uint8Array, o: number) => BigInt.asIntN(64, u(d, o, 8))
 
 // --- JSON-RPC over the HTTP capability --------------------------------------
 
-const rpc = (req: HTTPSendRequester, url: string, method: string, params: unknown[]): any => {
+// A CRE execution allows 15 HTTP calls: failover only spends what is left.
+const BUDGET = 15
+let calls = 0
+
+/** JSON-RPC with failover: a rate limit (429, -32029), a 5xx or a dead
+ *  endpoint moves on to the next URL, while the call budget allows. */
+const rpc = (req: HTTPSendRequester, urls: string[], method: string, params: unknown[], reserve = 0): any => {
 	const body = enc(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }))
-	const resp = req.sendRequest({ url, method: 'POST' as const, headers: { 'Content-Type': 'application/json' }, body }).result()
-	if (resp.statusCode !== 200) throw new Error(`${method}: HTTP ${resp.statusCode}`)
-	return JSON.parse(new TextDecoder().decode(resp.body))
+	let last = ''
+	for (const url of urls) {
+		if (calls >= BUDGET - reserve) break
+		calls++
+		try {
+			const resp = req.sendRequest({ url, method: 'POST' as const, headers: { 'Content-Type': 'application/json' }, body }).result()
+			const text = new TextDecoder().decode(resp.body)
+			if (resp.statusCode === 429 || resp.statusCode >= 500 || /"code":\s*(429|-32029|-32005)\b/.test(text)) {
+				last = `${method}: HTTP ${resp.statusCode} at ${url}`
+				continue
+			}
+			if (resp.statusCode !== 200) throw new Error(`${method}: HTTP ${resp.statusCode}`)
+			return JSON.parse(text)
+		} catch (e: any) {
+			last = `${method}: ${e?.message ?? e} at ${url}`
+		}
+	}
+	throw new Error(last || `${method}: out of HTTP budget`)
 }
 
 type Action = { position: string; market: string; op: 'compound' | 'rebalance' }
@@ -165,12 +188,14 @@ const accounts = (config: Config) => {
 const plan = (req: HTTPSendRequester, config: Config, nowS: number): string => {
 	const a = accounts(config)
 	const keys = [a.protocol.toBase58(), ...a.markets.map((m) => m.market.toBase58())]
-	const infos = rpc(req, config.rpcUrl, 'getMultipleAccounts', [keys, { encoding: 'base64', commitment: 'confirmed' }]).result.value
-	const positions = rpc(req, config.rpcUrl, 'getProgramAccounts', [
+	calls = 0
+	// Keep room for the two reads after this one.
+	const infos = rpc(req, config.rpcUrls, 'getMultipleAccounts', [keys, { encoding: 'base64', commitment: 'confirmed' }]).result.value
+	const positions = rpc(req, config.rpcUrls, 'getProgramAccounts', [
 		config.programId,
 		{ encoding: 'base64', commitment: 'confirmed', filters: [{ memcmp: { offset: 0, bytes: b58encode(Uint8Array.from(POSITION_DISC)) } }] },
 	]).result as { pubkey: string; account: { data: [string, string] } }[]
-	const blockhash = rpc(req, config.rpcUrl, 'getLatestBlockhash', [{ commitment: 'finalized' }]).result.value.blockhash as string
+	const blockhash = rpc(req, config.rpcUrls, 'getLatestBlockhash', [{ commitment: 'finalized' }]).result.value.blockhash as string
 
 	// Protocol (offsets checked against the IDL): cash @201, total_scaled_debt @209,
 	// borrow_index @225, last_accrual @241, rates @249.., min_borrow @265,
@@ -239,11 +264,17 @@ type Sent = { sent: number; landed: number; refused: number }
 /** Step 3, per node: send the agreed, already signed bytes. */
 const send = (req: HTTPSendRequester, config: Config, txs: string[]): Sent => {
 	const out: Sent = { sent: txs.length, landed: 0, refused: 0 }
-	for (const tx of txs) {
-		const r = rpc(req, config.rpcUrl, 'sendTransaction', [tx, { encoding: 'base64', preflightCommitment: 'confirmed' }])
-		if (r.result) out.landed++
-		else out.refused++ // nothing to do after all, or another node's copy landed first
-	}
+	calls = 0
+	txs.forEach((tx, i) => {
+		try {
+			// Leave one call for each transaction still to send.
+			const r = rpc(req, config.rpcUrls, 'sendTransaction', [tx, { encoding: 'base64', preflightCommitment: 'confirmed' }], txs.length - i - 1)
+			if (r.result) out.landed++
+			else out.refused++ // nothing to do after all, or another node's copy landed first
+		} catch {
+			out.refused++
+		}
+	})
 	return out
 }
 

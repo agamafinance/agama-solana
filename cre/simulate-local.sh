@@ -68,7 +68,7 @@ solana -u $SOLANA_RPC airdrop 5 "$(solana-keygen pubkey "$ROOT/.keys/cre-agent.j
 cd cre
 B58=$(node -e "console.log(require('$ROOT/node_modules/.pnpm/bs58@4.0.1/node_modules/bs58').encode(Buffer.from(require('$ROOT/.keys/cre-agent.json'))))")
 echo "CRE_AGENT_KEY=$B58" >> .env
-sed 's#"rpcUrl": "[^"]*"#"rpcUrl": "http://127.0.0.1:8899"#' agama-agents/config.simulation.json > agama-agents/config.local.json
+node -e 'const c=require("./agama-agents/config.simulation.json"); c.rpcUrls=["http://127.0.0.1:8899"]; console.log(JSON.stringify(c,null,2))' > agama-agents/config.local.json
 cp agama-agents/workflow.yaml agama-agents/workflow.yaml.bak
 cat >> agama-agents/workflow.yaml <<YAML
 
