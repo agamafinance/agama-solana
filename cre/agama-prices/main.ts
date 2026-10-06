@@ -166,13 +166,17 @@ const whirlpoolSqrtPrice = (req: HTTPSendRequester, rpc: string, pool: string): 
 
 type DsCreds = { key: string; secret: string; nowMs: number }
 
-/** fullReport = abi(bytes32[3] ctx, bytes blob, ...); blob = v11 fields, one 32-byte word each. */
-function decodeV11(hex: string): { mid: number; status: number; at: number } {
+/** fullReport = abi(bytes32[3] ctx, bytes blob, ...); blob = one 32-byte word
+ *  per field. Word 6 is v11's mid and v3's benchmarkPrice (18 decimals), word 2
+ *  the observation time, word 13 v11's marketStatus (absent from v3: 0). */
+function decodeReport(hex: string): { mid: number; status: number; at: number } {
 	const h = hex.replace(/^0x/, '')
 	const word = (off: number, i: number) => BigInt('0x' + h.slice((off + i * 32) * 2, (off + i * 32 + 32) * 2))
-	const blobOff = Number(word(0, 3)) + 32
+	const lenOff = Number(word(0, 3))
+	const words = Number(word(lenOff, 0)) / 32
+	const blobOff = lenOff + 32
 	const mid = BigInt.asIntN(256, word(blobOff, 6))
-	return { mid: Number(mid / 10n ** 10n) / 1e8, status: Number(word(blobOff, 13)), at: Number(word(blobOff, 2)) }
+	return { mid: Number(mid / 10n ** 10n) / 1e8, status: words > 13 ? Number(word(blobOff, 13)) : 0, at: Number(word(blobOff, 2)) }
 }
 
 /** One signed bulk request to the Data Streams API (HMAC-SHA256 over method,
@@ -217,7 +221,7 @@ const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observati
 		try {
 			const ids = streamed.flatMap((m) => [m.streams!.regular, m.streams!.extended, m.streams!.overnight])
 			const raw = dsBulk(req, config, ds, ids)
-			const byId = new Map([...raw].map(([k, v]) => [k, decodeV11(v)]))
+			const byId = new Map([...raw].map(([k, v]) => [k, decodeReport(v)]))
 			for (const m of streamed) {
 				const reg = byId.get(m.streams!.regular.toLowerCase())
 				const ext = byId.get(m.streams!.extended.toLowerCase())
@@ -272,9 +276,8 @@ const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observati
 				const xau = raw.get(m.streams!.xau.toLowerCase())
 				const usdt = raw.get(m.streams!.usdt.toLowerCase())
 				if (!xau || !usdt) continue
-				// v3 reports: benchmarkPrice sits in the word v11 uses for mid.
-				const x = decodeV11(xau)
-				const u = decodeV11(usdt)
+				const x = decodeReport(xau)
+				const u = decodeReport(usdt)
 				if (x.mid > 0 && u.mid > 0) {
 					out[`${m.symbol}_s`] = x.mid * u.mid
 					out[`${m.symbol}_st`] = Math.min(x.at, u.at)
