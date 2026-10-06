@@ -152,6 +152,16 @@ liquidator; an Amplify loop liquidated at the bonus; lenders earning the rate
 and not withdrawing lent cash; the price bounds (keeper only, 15% per push,
 publish time, staleness, off-hours terms); the slider.
 
+## The app
+
+`web/` is the Agama app shell with Solana as its platform: Earn, Amplify, Lend,
+Portfolio and a one-transaction Faucet under `/solana`, for Phantom, Solflare,
+Backpack or any injected wallet. `cd web && pnpm dev` serves it on
+http://localhost:3031/solana. `web/scripts/ui-e2e.mjs` drives it in a headless
+browser with a throwaway signer, every click a real devnet transaction: faucet,
+Earn open, the slider, Amplify open and close, Lend supply and withdraw, Earn
+close.
+
 ## Instructions
 
 | | Who | What |
