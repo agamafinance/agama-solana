@@ -28,10 +28,13 @@ async function main() {
     );
   }
 
-  const positions = await a.position.all();
-  console.log(`positions ${positions.length}`);
+  const all = await a.position.all();
+  const live = new Set(MARKETS.map((m) => marketAccounts(m.symbol).market.toBase58()));
+  const positions = all.filter((x: any) => live.has(x.account.market.toBase58()));
+  console.log(`positions ${positions.length}${all.length > positions.length ? ` (plus ${all.length - positions.length} left from v1)` : ""}`);
   for (const { publicKey, account: s } of positions) {
     const sym = MARKETS.find((m) => marketAccounts(m.symbol).market.equals(s.market))?.symbol;
+    if (!sym) continue; // a position of the previous (v1) deployment
     console.log(
       `  ${publicKey.toBase58().slice(0, 8)} ${s.kind === 0 ? "earn   " : "amplify"} ${sym} ${(Number(s.collateral) / 1e8).toFixed(4)} ` +
         `debt ${((Number(s.scaledDebt) * index) / 1e6).toFixed(2)} target ${s.targetLtvBps / 100}% last op ${s.lastAgentOp}`,

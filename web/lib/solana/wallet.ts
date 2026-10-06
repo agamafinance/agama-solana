@@ -103,17 +103,21 @@ export async function sendIxs(
   payer: PublicKey,
   ixs: TransactionInstruction[],
   opts: { skipPreflight?: boolean } = {},
-): Promise<string> {
+): Promise<{ sig: string; raw: Uint8Array; lastValidBlockHeight: number }> {
   if (typeof provider.signTransaction !== 'function') {
     throw new Error('this wallet cannot sign a transaction without also submitting it');
   }
   const tx = new Transaction();
   tx.add(...ixs);
   tx.feePayer = payer;
-  tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = blockhash;
 
   const signed = await provider.signTransaction(tx);
-  return connection.sendRawTransaction(signed.serialize(), {
+  const raw = signed.serialize();
+  const sig = await connection.sendRawTransaction(raw, {
     skipPreflight: opts.skipPreflight ?? false,
+    maxRetries: 0,
   });
+  return { sig, raw, lastValidBlockHeight };
 }

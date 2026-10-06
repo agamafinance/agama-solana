@@ -13,7 +13,7 @@
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
-import { MARKETS, connection, fetchQuotes, keeperKeypair, marketAccounts, programFor, rails } from "./common";
+import { MARKETS, connection, fetchQuotes, keeperKeypair, marketAccounts, programFor, rails, sendReliably } from "./common";
 
 const TICK_MS = Number(process.env.TICK_MS ?? 30_000);
 const REPUSH_AGE = 240; // seconds; the program's max_age is 600
@@ -44,10 +44,11 @@ async function pushPrices() {
     }
     const publishTime = Math.max(q.publishTime, Number(m.priceTime));
     try {
-      const sig = await program.methods
+      const ix = await program.methods
         .pushPrice(new BN(target.toString()), new BN(publishTime), q.sessionOpen)
         .accountsPartial({ keeper: keeper.publicKey, protocol: rails(q.symbol).protocol, market })
-        .rpc();
+        .instruction();
+      const sig = await sendReliably(conn, [ix], [keeper]);
       log(`price ${q.symbol} ${(Number(target) / 1e8).toFixed(2)} (${q.source})`, sig.slice(0, 16));
     } catch (e: any) {
       log(`price ${q.symbol} failed: ${e.message?.split("\n")[0]}`);
@@ -80,9 +81,7 @@ async function runAgents() {
       tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
       const sim = await conn.simulateTransaction(tx);
       if (sim.value.err) continue; // nothing to do: on target, or no yield yet
-      tx.sign(keeper);
-      const sig = await conn.sendRawTransaction(tx.serialize());
-      await conn.confirmTransaction(sig, "confirmed");
+      const sig = await sendReliably(conn, [built], [keeper]);
       const after = await accounts.position.fetch(publicKey);
       log(`agent ${ix} ${symbol} ${publicKey.toBase58().slice(0, 8)}: ${OPS[after.lastAgentOp]}`, sig.slice(0, 16));
     }

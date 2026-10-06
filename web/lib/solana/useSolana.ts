@@ -404,21 +404,26 @@ export const ix = {
 };
 
 /// Sign with the wallet, send to devnet, wait for confirmation by polling.
-/// Polling rather than a websocket subscription, which some RPC fronts drop.
+/// Polling rather than a websocket subscription, which some RPC fronts drop,
+/// and the same signed bytes re-sent every 2 s, since devnet RPCs drop
+/// transactions under load. Never re-signed: the wallet is asked once.
 export async function send(
   provider: SolanaProvider,
   payer: PublicKey,
   ixs: TransactionInstruction[],
 ): Promise<string> {
-  const sig = await sendIxs(provider, connection, payer, ixs);
-  for (let i = 0; i < 60; i++) {
-    const { value } = await connection.getSignatureStatuses([sig]);
+  const { sig, raw, lastValidBlockHeight } = await sendIxs(provider, connection, payer, ixs);
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const { value } = await connection.getSignatureStatuses([sig], { searchTransactionHistory: true });
     const st = value[0];
     if (st?.err) throw new Error(`Transaction failed: ${JSON.stringify(st.err)}`);
     if (st?.confirmationStatus === 'confirmed' || st?.confirmationStatus === 'finalized') return sig;
-    await new Promise((r) => setTimeout(r, 1000));
+    if ((await connection.getBlockHeight('confirmed')) > lastValidBlockHeight) {
+      throw new Error(`Expired before landing, nothing was spent: ${sig}`);
+    }
+    await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
   }
-  throw new Error(`Not confirmed after 60 s: ${sig}`);
 }
 
 /// The program's own error name when there is one, the wallet's message

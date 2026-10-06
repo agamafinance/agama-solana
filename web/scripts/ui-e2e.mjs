@@ -111,6 +111,9 @@ async function main() {
 
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
+  globalThis.__page = page;
+  globalThis.__console = [];
+  page.on('console', (m) => globalThis.__console.push(`${m.type()}: ${m.text()}`.slice(0, 300)));
   page.on('pageerror', (e) => errors.push(String(e)));
   // Legacy transactions from the Anchor client, v0 ones from the confidential
   // flows (Kit), already carrying the proof accounts' own signatures.
@@ -169,7 +172,7 @@ async function main() {
         return false;
       },
       seen,
-      { timeout: 90_000, polling: 500 },
+      { timeout: Number(process.env.SETTLE_MS ?? 90_000), polling: 500 },
     );
     const { text, sig } = await handle.jsonValue();
     if (!text.startsWith('Done.') || !sig) throw new Error(`${label}: ${text}`);
@@ -314,7 +317,12 @@ async function main() {
   console.log('PASS');
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   console.error('FAIL', e.message ?? e);
+  try {
+    const text = await globalThis.__page?.evaluate(() => document.body.innerText);
+    if (text) console.error('page at failure:\n' + text.slice(0, 1500));
+    console.error('console (last 25):\n' + (globalThis.__console ?? []).slice(-25).join('\n'));
+  } catch {}
   process.exit(1);
 });

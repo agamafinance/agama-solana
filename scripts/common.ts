@@ -4,7 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import * as anchor from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 export const RPC = process.env.SOLANA_RPC ?? "https://rpc.magicblock.app/devnet";
@@ -133,3 +133,29 @@ export async function fetchQuotes(): Promise<Quote[]> {
 }
 
 export const fmtUsd = (x: bigint | number, decimals = 6) => (Number(x) / 10 ** decimals).toFixed(2);
+
+/// Sign, send, and see it confirmed. Devnet RPCs drop transactions under load,
+/// so the same signed bytes are re-sent every 2 s until the blockhash expires,
+/// then the transaction is signed again with a fresh one (at most three times).
+export async function sendReliably(
+  conn: Connection,
+  ixs: TransactionInstruction[],
+  signers: Keypair[],
+): Promise<string> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+    const tx = new Transaction({ feePayer: signers[0].publicKey, blockhash, lastValidBlockHeight }).add(...ixs);
+    tx.sign(...signers);
+    const raw = tx.serialize();
+    const sig = await conn.sendRawTransaction(raw, { preflightCommitment: "confirmed", maxRetries: 0 });
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const st = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
+      if (st?.err) throw new Error(`${sig} failed: ${JSON.stringify(st.err)}`);
+      if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") return sig;
+      if ((await conn.getBlockHeight("confirmed")) > lastValidBlockHeight) break;
+      await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+    }
+  }
+  throw new Error("not confirmed after three blockhashes");
+}

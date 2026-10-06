@@ -147,7 +147,7 @@ and checked exactly.
 
 | | |
 |---|---|
-| Status | Devnet still runs the previous build (classic SPL mints). The Token-2022 confidential build in this branch is verified locally and waits for its devnet upgrade. |
+| Status | Live on devnet: Token-2022 with confidential balances. The deployed bytes match a build of this branch. |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) (devnet) |
 | Every address | [`deployments/devnet.json`](deployments/devnet.json) |
 | IDL | [`idl/agama_solana.json`](idl/agama_solana.json) |

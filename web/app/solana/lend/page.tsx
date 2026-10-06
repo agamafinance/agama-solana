@@ -13,7 +13,7 @@ import { AmountBox, card, Hero, Panel, parseAmount, primaryBtn, Row, Stat, Statu
 
 export default function SolanaLendPage() {
   const { address, provider, connect } = useSolanaWallet();
-  const { snap, refresh } = useSnapshot(address);
+  const { snap, error: snapError, refresh } = useSnapshot(address);
   const p = snap?.protocol;
   const [mode, setMode] = useState<'supply' | 'withdraw'>('supply');
   const [amount, setAmount] = useState('');
@@ -40,7 +40,11 @@ export default function SolanaLendPage() {
     mode === 'supply' ? (amt > (snap?.usdc ?? 0n) ? amt - (snap?.usdc ?? 0n) : 0n) : lpArg > pubLp ? lpArg - pubLp : 0n;
 
   async function submit() {
-    if (!address || !provider || !snap) return;
+    if (!address || !provider) return;
+    if (!snap) {
+      setStatus({ text: snapError ? `Could not read your balances: ${snapError}` : 'Still reading your balances, one moment.' });
+      return;
+    }
     setBusy(true);
     setStatus({ text: mode === 'supply' ? 'Supplying...' : 'Withdrawing...' });
     try {
@@ -110,7 +114,7 @@ export default function SolanaLendPage() {
             />
             <button
               onClick={address ? submit : () => connect()}
-              disabled={busy || (!!address && (amt === 0n || tooMuch))}
+              disabled={busy || (!!address && (amt === 0n || tooMuch || !snap))}
               className={`mt-4 ${primaryBtn}`}
             >
               {!address
@@ -128,6 +132,7 @@ export default function SolanaLendPage() {
               what={mode === 'supply' ? 'the LP token you receive' : 'the USDC you withdraw'}
             />
             {!busy && status && <Status text={status.text} sig={status.sig} />}
+            {!busy && !status && address && !snap && snapError && <Status text={`Could not read your balances: ${snapError}`} />}
           </div>
           <div className={card}>
             <h2 className="text-[17px] font-semibold text-fg">The pool</h2>

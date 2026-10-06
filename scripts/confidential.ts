@@ -76,21 +76,31 @@ export async function ataOf(owner: Address, mint: Address): Promise<Address> {
 
 type Msg = TransactionMessage & TransactionMessageWithFeePayer;
 
-/// Send one message, then poll: the public devnet RPCs do not proxy the
-/// websocket confirmation reliably.
+/// Send one message and see it confirmed. Devnet RPCs drop transactions under
+/// load, so the same signed bytes are re-sent every 2 s until the blockhash
+/// expires; an expired one that never landed is signed again with a fresh
+/// blockhash (at most three times). A landed transaction is never re-signed.
 async function sendMessage(msg: Msg): Promise<string> {
-  const { value: bh } = await rpc.getLatestBlockhash().send();
-  const tx = await signTransactionMessageWithSigners(setTransactionMessageLifetimeUsingBlockhash(bh, msg) as any);
-  const sig = getSignatureFromTransaction(tx);
-  await rpc.sendTransaction(getBase64EncodedWireTransaction(tx), { encoding: "base64", preflightCommitment: "confirmed" }).send();
-  for (let i = 0; i < 90; i++) {
-    const { value } = await rpc.getSignatureStatuses([sig]).send();
-    const s = value[0];
-    if (s?.err) throw new Error(`${sig} failed: ${JSON.stringify(s.err, (_, v) => (typeof v === "bigint" ? v.toString() : v))}`);
-    if (s && (s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized")) return sig;
-    await new Promise((r) => setTimeout(r, 1000));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { value: bh } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
+    const tx = await signTransactionMessageWithSigners(setTransactionMessageLifetimeUsingBlockhash(bh, msg) as any);
+    const sig = getSignatureFromTransaction(tx);
+    const wire = getBase64EncodedWireTransaction(tx);
+    const send = () =>
+      rpc.sendTransaction(wire, { encoding: "base64", preflightCommitment: "confirmed", maxRetries: 0n }).send();
+    await send();
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const { value } = await rpc.getSignatureStatuses([sig], { searchTransactionHistory: true }).send();
+      const s = value[0];
+      if (s?.err) throw new Error(`${sig} failed: ${JSON.stringify(s.err, (_, v) => (typeof v === "bigint" ? v.toString() : v))}`);
+      if (s && (s.confirmationStatus === "confirmed" || s.confirmationStatus === "finalized")) return sig;
+      const height = await rpc.getBlockHeight({ commitment: "confirmed" }).send();
+      if (height > bh.lastValidBlockHeight) break;
+      await send().catch(() => {});
+    }
   }
-  throw new Error(`not confirmed: ${sig}`);
+  throw new Error("not confirmed after three blockhashes");
 }
 
 export async function sendIxs(payer: TransactionSigner, ixs: Instruction[]): Promise<string> {

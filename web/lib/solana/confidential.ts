@@ -176,22 +176,28 @@ export async function runBatch(
   for (let i = 0; i < signed.length; i++) {
     progress(`Sending ${i + 1} of ${signed.length}...`);
     const raw = signed[i].serialize();
-    const sig = await conn.sendRawTransaction(raw, { skipPreflight: false, preflightCommitment: 'confirmed' });
-    await confirm(conn, sig);
+    const sig = await conn.sendRawTransaction(raw, { skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0 });
+    await confirm(conn, sig, raw, lastValidBlockHeight);
     sigs.push(sig);
   }
   return sigs;
 }
 
-async function confirm(conn: Connection, sig: string) {
-  for (let i = 0; i < 90; i++) {
-    const { value } = await conn.getSignatureStatuses([sig]);
+/// Devnet RPCs drop transactions under load: re-send the same signed bytes
+/// every 2 s until it lands or its blockhash expires. Nothing is re-signed, so
+/// the wallet is asked once.
+async function confirm(conn: Connection, sig: string, raw: Uint8Array, lastValidBlockHeight: number) {
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const { value } = await conn.getSignatureStatuses([sig], { searchTransactionHistory: true });
     const st = value[0];
     if (st?.err) throw new Error(`Transaction failed: ${JSON.stringify(st.err)}`);
     if (st?.confirmationStatus === 'confirmed' || st?.confirmationStatus === 'finalized') return;
-    await new Promise((r) => setTimeout(r, 1000));
+    if ((await conn.getBlockHeight('confirmed')) > lastValidBlockHeight) {
+      throw new Error(`Expired before landing, nothing was spent: ${sig}`);
+    }
+    await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
   }
-  throw new Error(`Not confirmed after 90 s: ${sig}`);
 }
 
 // ---------------------------------------------------------------------------
