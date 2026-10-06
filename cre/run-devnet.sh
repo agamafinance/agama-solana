@@ -12,6 +12,10 @@ cd "$ROOT/cre"
   echo "CRE_SOLANA_PRIVATE_KEY=$(node -e "console.log(require('$ROOT/node_modules/.pnpm/bs58@4.0.1/node_modules/bs58').encode(Buffer.from(require('$ROOT/.keys/cre-transmitter.json'))))")"
   echo "CRE_AGENT_KEY=$(node -e "console.log(require('$ROOT/node_modules/.pnpm/bs58@4.0.1/node_modules/bs58').encode(Buffer.from(require('$ROOT/.keys/cre-agent.json'))))")"
   echo "CRE_ETH_PRIVATE_KEY=$(head -1 "$ROOT/.keys/cre-owner.evm" | sed 's/^0x//')"
+  # Data Streams credentials, if present
+  if [ -f "$ROOT/.keys/datastreams.env" ]; then
+    sed -n 's/^DATASTREAMS_API_KEY=/CRE_DS_KEY=/p; s/^DATASTREAMS_API_SECRET=/CRE_DS_SECRET=/p' "$ROOT/.keys/datastreams.env"
+  fi
 } > .env
 chmod 600 .env
 exec cre workflow simulate "${1:-agama-prices}" --target simulation-settings --broadcast --non-interactive --trigger-index 0

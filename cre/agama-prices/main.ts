@@ -1,6 +1,9 @@
 // agama-prices: the price layer of Agama on Solana, as a Chainlink CRE workflow.
 //
 // Every minute, each node of the DON reads the same public sources:
+//   - Chainlink Data Streams (RWA Advanced v11): each share's regular,
+//     extended and overnight stream; marketStatus picks the live one. The
+//     primary price whenever a session is live
 //   - Jupiter's price API for the xStocks on Solana mainnet: the token's own
 //     24/7 price and the underlying share's last price
 //   - DexScreener, the deepest USDC pair of each xStock (Raydium, Meteora...):
@@ -33,16 +36,22 @@ import {
 import { getBase58Decoder } from '@solana/codecs'
 import { PublicKey } from '@solana/web3.js'
 import { z } from 'zod'
+import { hmac } from '@noble/hashes/hmac'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
 import { AgamaSolana, type PriceUpdate } from '../contracts/solana/ts/generated'
 
 const BASE58 = getBase58Decoder()
 const enc = (s: string) => new TextEncoder().encode(s)
 
-const xstock = z.object({ symbol: z.string().max(8), kind: z.literal('xstock'), mint: z.string() })
+const streams = z.object({ regular: z.string(), extended: z.string(), overnight: z.string() })
+const xstock = z.object({ symbol: z.string().max(8), kind: z.literal('xstock'), mint: z.string(), streams: streams.optional() })
 const gold = z.object({ symbol: z.string().max(8), kind: z.literal('gold'), orcaPool: z.string() })
 
 const configSchema = z.object({
 	schedule: z.string(),
+	/** Chainlink Data Streams REST API (RWA Advanced v11 reports for the shares). */
+	dataStreamsUrl: z.string(),
 	jupiterUrl: z.string(),
 	/** Second, independent source for the xStock tokens: DEX pairs (Raydium, Meteora...). */
 	dexscreenerUrl: z.string(),
@@ -149,7 +158,18 @@ const whirlpoolSqrtPrice = (req: HTTPSendRequester, rpc: string, pool: string): 
 	return v
 }
 
-const observe = (req: HTTPSendRequester, config: Config): Observation => {
+type DsCreds = { key: string; secret: string; nowMs: number }
+
+/** fullReport = abi(bytes32[3] ctx, bytes blob, ...); blob = v11 fields, one 32-byte word each. */
+function decodeV11(hex: string): { mid: number; status: number; at: number } {
+	const h = hex.replace(/^0x/, '')
+	const word = (off: number, i: number) => BigInt('0x' + h.slice((off + i * 32) * 2, (off + i * 32 + 32) * 2))
+	const blobOff = Number(word(0, 3)) + 32
+	const mid = BigInt.asIntN(256, word(blobOff, 6))
+	return { mid: Number(mid / 10n ** 10n) / 1e8, status: Number(word(blobOff, 13)), at: Number(word(blobOff, 2)) }
+}
+
+const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observation => {
 	const out: Observation = {}
 	const xs = config.markets.filter((m) => m.kind === 'xstock')
 	const golds = config.markets.filter((m) => m.kind === 'gold')
@@ -159,6 +179,44 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 		out[`${m.symbol}_t`] = 0
 		out[`${m.symbol}_d`] = 0
 		out[`${m.symbol}_g`] = 0 // gold spot publish time
+		out[`${m.symbol}_s`] = 0 // Data Streams mid for the session that is live
+		out[`${m.symbol}_ss`] = 0 // its market status (2 regular, 1 pre, 3 post, 4 overnight)
+		out[`${m.symbol}_st`] = 0 // its observation time
+	}
+	// Chainlink Data Streams first: every share's regular, extended and
+	// overnight stream in one signed request (HMAC-SHA256 over method, path,
+	// body hash, key and time, as the API wants).
+	const streamed = config.markets.flatMap((m) => (m.kind === 'xstock' && m.streams ? [m] : []))
+	if (streamed.length && ds.key) {
+		try {
+			const ids = streamed.flatMap((m) => [m.streams!.regular, m.streams!.extended, m.streams!.overnight])
+			const path = `/api/v1/reports/bulk?feedIDs=${ids.join(',')}&timestamp=${Math.floor(ds.nowMs / 1000) - 2}`
+			const toSign = `GET ${path} ${bytesToHex(sha256(new Uint8Array()))} ${ds.key} ${ds.nowMs}`
+			const signature = bytesToHex(hmac(sha256, enc(ds.secret), enc(toSign)))
+			const resp = req
+				.sendRequest({
+					url: config.dataStreamsUrl + path,
+					method: 'GET' as const,
+					headers: { Authorization: ds.key, 'X-Authorization-Timestamp': String(ds.nowMs), 'X-Authorization-Signature-SHA256': signature },
+				})
+				.result()
+			if (resp.statusCode === 200) {
+				const byId = new Map<string, { mid: number; status: number; at: number }>()
+				for (const r of JSON.parse(new TextDecoder().decode(resp.body)).reports ?? []) byId.set(String(r.feedID).toLowerCase(), decodeV11(r.fullReport))
+				for (const m of streamed) {
+					const reg = byId.get(m.streams!.regular.toLowerCase())
+					const ext = byId.get(m.streams!.extended.toLowerCase())
+					const ovn = byId.get(m.streams!.overnight.toLowerCase())
+					// marketStatus says which session is live; never the timestamps.
+					const live = reg && reg.status === 2 ? reg : ext && (ext.status === 1 || ext.status === 3) ? ext : ovn && ovn.status === 4 ? ovn : undefined
+					if (live && live.mid > 0) {
+						out[`${m.symbol}_s`] = live.mid
+						out[`${m.symbol}_ss`] = live.status
+						out[`${m.symbol}_st`] = live.at
+					}
+				}
+			}
+		} catch {}
 	}
 	// Each source on its own: one failing must not take the others down.
 	if (xs.length) {
@@ -211,7 +269,7 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 			} catch {}
 		}
 	}
-	for (const m of config.markets) for (const k of ['a', 'b', 'd']) out[`${m.symbol}_${k}_ok`] = out[`${m.symbol}_${k}`] > 0 ? 1 : 0
+	for (const m of config.markets) for (const k of ['a', 'b', 'd', 's']) out[`${m.symbol}_${k}_ok`] = out[`${m.symbol}_${k}`] > 0 ? 1 : 0
 	return out
 }
 
@@ -248,6 +306,17 @@ function decide(config: Config, obs: Observation, now: Date, skipped: string[]):
 				token = a > 0 ? a : d
 				tokenSource = a > 0 ? 'Jupiter only' : 'DEX only'
 			} else continue
+			// Chainlink Data Streams lead whenever a session (regular, pre, post,
+			// overnight) is live and the token agrees with them; regular hours
+			// get the session terms, the extended sessions the off-hours ones.
+			const sp = seen(`${m.symbol}_s`) ? obs[`${m.symbol}_s`] : 0
+			const status = Math.round(obs[`${m.symbol}_ss`] ?? 0)
+			if (sp > 0 && Math.abs(sp / token - 1) * 10_000 <= (3 * config.sourceMaxDeviationBps) / 2) {
+				const label = ['', 'pre-market', 'regular', 'post-market', 'overnight'][status] ?? 'session'
+				out.push({ symbol: m.symbol, price: sp, open: status === 2, source: `Data Streams ${label}, token ${tokenSource}`, at: Math.min(nowS, Math.round(obs[`${m.symbol}_st`])) })
+				continue
+			}
+			if (sp > 0) skipped.push(`${m.symbol}: Data Streams ${sp.toFixed(2)} vs token ${token.toFixed(2)}, falling back`)
 			const shareFresh = b > 0 && nowS - obs[`${m.symbol}_t`] < config.shareMaxAge
 			// In session the share price leads, as long as the token agrees with it.
 			const shareAgrees = shareFresh && Math.abs(b / token - 1) * 10_000 <= 3 * config.sourceMaxDeviationBps / 2
@@ -284,14 +353,17 @@ const onCron = (runtime: Runtime<Config>) => {
 
 	const fields = Object.fromEntries(
 		config.markets.flatMap((m) =>
-			['a', 'b', 't', 'd', 'g', 'a_ok', 'b_ok', 'd_ok'].map((k) => [`${m.symbol}_${k}`, median<number>]),
+			['a', 'b', 't', 'd', 'g', 's', 'ss', 'st', 'a_ok', 'b_ok', 'd_ok', 's_ok'].map((k) => [`${m.symbol}_${k}`, median<number>]),
 		),
 	)
 	let obs: Observation
 	try {
 		const agg = ConsensusAggregationByFields<Observation>(fields as any)
+		// Secrets are read in DON mode and handed to the node-mode fetch.
+		const key = runtime.getSecret({ id: 'DATASTREAMS_API_KEY' }).result().value
+		const secret = runtime.getSecret({ id: 'DATASTREAMS_API_SECRET' }).result().value
 		const call = new HTTPClient().sendRequest(runtime, observe, agg)
-		obs = call(config).result()
+		obs = call(config, { key, secret, nowMs: now.getTime() }).result()
 	} catch (e: any) {
 		runtime.log(`observe failed: ${e?.message} ${String(e?.stack ?? '').slice(0, 600)}`)
 		throw e

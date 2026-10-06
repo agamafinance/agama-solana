@@ -113,6 +113,9 @@ only as a fallback anyone can run.
 ```
 cron, every minute (one group of three markets per run, in turn)
   each DON node, over HTTP:
+    Chainlink Data      the 9 shares' regular, extended and overnight streams
+      Streams           (RWA Advanced v11), one signed bulk request; the
+                        marketStatus field picks the live session
     Jupiter price API   the 9 xStocks: the token's own price and the share's
     DexScreener         the deepest USDC pair of each xStock: a second,
                         independent token price (Raydium, Meteora...)
@@ -130,9 +133,20 @@ cron, every minute (one group of three markets per run, in turn)
   last price. In session the share price leads only while it is within 3% of
   that token price. GLDY needs the Orca pool within 3% of gold spot, or falls
   back to spot.
-- **Chainlink Data Streams next.** Chainlink publishes US equities streams on
-  Solana; access is requested. The workflow will fetch them as the primary
-  price, with the current sources as the cross-check.
+- **Chainlink Data Streams lead.** Whenever a session is live (regular, pre,
+  post or overnight, as the report's `marketStatus` says, never inferred from
+  timestamps), the share price comes from Chainlink Data Streams, stamped
+  with the report's observation time, provided the token's own price (Jupiter
+  and the DEX pair) agrees within 3%. Regular hours get the session terms, the
+  extended sessions the off-hours ones. Weekends, when the streams are closed,
+  fall back to the token. Testnet credentials from Chainlink live in
+  `.keys/datastreams.env` and reach the workflow as CRE secrets; under a DON
+  they belong in the Vault DON. `scripts/datastreams-check.ts` fetches and
+  decodes the 27 reports on its own.
+- **Next: verify the reports on chain.** The program could take the signed
+  report and CPI Chainlink's Data Streams Verifier on Solana, so the price is
+  checked by the Data Streams DON's signatures rather than trusted from the
+  workflow. That needs our account on the Verifier's access controller.
 - **The receiver checks who is calling.** `on_report` requires the configured
   forwarder state and the forwarder's authority PDA for this program as signer.
   On the live Keystone Forwarder that proves the DON signed, not whose

@@ -37,6 +37,8 @@ cat > .env <<ENV
 CRE_SOLANA_PRIVATE_KEY=$(node -e "const bs58=require('$ROOT/node_modules/.pnpm/bs58@4.0.1/node_modules/bs58');console.log(bs58.default?bs58.default.encode(Buffer.from(require('$TX'))):bs58.encode(Buffer.from(require('$TX'))))")
 CRE_ETH_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000001
 ENV
+echo "CRE_AGENT_KEY=$(node -e "console.log(require('$ROOT/node_modules/.pnpm/bs58@4.0.1/node_modules/bs58').encode(Buffer.from(require('$ROOT/.keys/cre-agent.json'))))")" >> .env
+[ -f "$ROOT/.keys/datastreams.env" ] && sed -n 's/^DATASTREAMS_API_KEY=/CRE_DS_KEY=/p; s/^DATASTREAMS_API_SECRET=/CRE_DS_SECRET=/p' "$ROOT/.keys/datastreams.env" >> .env
 cat > project.local.yaml <<YAML
 local-settings:
   rpcs:
@@ -54,7 +56,7 @@ local-settings:
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.simulation.json"
-    secrets-path: ""
+    secrets-path: "../secrets.yaml"
 YAML
 restore() { C="$ROOT/cre"; mv "$C/project.yaml.bak" "$C/project.yaml"; mv "$C/agama-prices/workflow.yaml.bak" "$C/agama-prices/workflow.yaml"; rm -f "$C/project.local.yaml"; }
 trap 'restore; kill $V 2>/dev/null; rm -rf "$L"' EXIT
