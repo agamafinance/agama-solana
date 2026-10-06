@@ -1,7 +1,7 @@
 'use client';
 
-// Confidential balances in the browser, for every Agama token: USDC, the four
-// stocks and the LP token are Token-2022 mints with the confidential transfer
+// Confidential balances in the browser, for every Agama token: USDC, the
+// stocks, GLDY and the LP token are Token-2022 mints with the confidential transfer
 // extension. A balance moved into the confidential side is an ElGamal
 // ciphertext only its owner can read; a private send hides the amount from
 // everyone but the two parties. The ZK proofs are built here, with the

@@ -10,7 +10,7 @@ import {
   ago, borrowRateBps, errorText, ix, pct, px, qty, send, stockFor, stockValue, usd, useSnapshot,
 } from '@/lib/solana/useSolana';
 import {
-  AgentsCard, AmountBox, card, Hero, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
+  AgentsCard, AmountBox, card, Hero, CreBadge, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
   Stat, Status, toDecimal,
 } from '@/components/solana/ui';
 
@@ -101,6 +101,7 @@ export default function SolanaAmplifyPage() {
       <Panel>
         {error && !snap && <p className="text-[13px] text-[#b4571f]">{error}</p>}
         {snap && <MarketCards markets={snap.markets} sel={sel} onSelect={setSel} connected={!!address} />}
+        {snap && <CreBadge cre={snap.cre} />}
 
         <div className="grid gap-5 lg:grid-cols-[1fr_1fr] items-start">
           <div className={card}>

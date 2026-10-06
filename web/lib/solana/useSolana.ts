@@ -8,11 +8,12 @@ import {
   SystemProgram,
   type TransactionInstruction,
 } from '@solana/web3.js';
+import { Transaction as LegacyTx } from '@solana/web3.js';
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID as TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 import idlJson from './idl.json';
 import {
-  ata, BPS, lpMint, poolUsdc, positionPda, protocolPda, RPC, STOCKS, usdcMint, VALUE_SCALE, vaultUsdc, WAD, YEAR,
+  ata, BPS, crePda, lpMint, poolUsdc, positionPda, protocolPda, RPC, STOCKS, usdcMint, VALUE_SCALE, vaultUsdc, WAD, YEAR,
   type Kind, type Stock,
 } from './config';
 import { sendIxs, type SolanaProvider } from './wallet';
@@ -95,6 +96,8 @@ export interface Position {
 }
 
 export interface Snapshot {
+  /** The Chainlink CRE receiver, if configured. */
+  cre?: { simulation: boolean; reports: number; lastReportAt: number };
   protocol: Protocol;
   markets: Market[];
   earn: (Position | undefined)[];
@@ -224,14 +227,15 @@ const tokenAmount = (data: Buffer | undefined) => (data && data.length >= 72 ? d
 const mintSupply = (data: Buffer | undefined) => (data && data.length >= 44 ? data.readBigUInt64LE(36) : 0n);
 
 /// Everything every page needs, in one `getMultipleAccounts`: the protocol,
-/// the four markets, the LP mint, and when a wallet is connected its eight
-/// possible positions and six token balances. One round trip per refresh.
+/// the markets, the LP mint, the CRE receiver, and when a wallet is connected
+/// its possible positions and token balances. One round trip per refresh.
 export async function readSnapshot(owner?: PublicKey): Promise<Snapshot> {
   const keys: PublicKey[] = [protocolPda, lpMint, ...STOCKS.map((s) => s.market)];
   if (owner) {
     keys.push(ata(owner, usdcMint), ata(owner, lpMint), ...STOCKS.map((s) => ata(owner, s.stockMint)));
     for (const s of STOCKS) keys.push(positionPda(owner, s.market, 'earn'), positionPda(owner, s.market, 'amplify'));
   }
+  keys.push(crePda);
   const [infos, sol] = await Promise.all([
     connection.getMultipleAccountsInfo(keys),
     owner ? connection.getBalance(owner) : Promise.resolve(0),
@@ -254,9 +258,16 @@ export async function readSnapshot(owner?: PublicKey): Promise<Snapshot> {
       amplify.push(a ? decodePosition(keys[base + 2 * i + 1], s, a.data, protocol, markets[i]) : undefined);
     });
   }
+  // CreConfig: disc 8 | forwarder 32 | state 32 | owner 20 | simulation 1 | bump 1 | reports u64 | last i64
+  const creData = infos[keys.length - 1]?.data;
+  const cre =
+    creData && creData.length >= 110
+      ? { simulation: creData[92] === 1, reports: Number(creData.readBigUInt64LE(94)), lastReportAt: Number(creData.readBigInt64LE(102)) }
+      : undefined;
   return {
     protocol,
     markets,
+    cre,
     earn,
     amplify,
     usdc: owner ? tokenAmount(infos[o]?.data) : 0n,
@@ -424,6 +435,41 @@ export async function send(
     }
     await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
   }
+}
+
+/// Several transactions approved once (`signAllTransactions` when the wallet
+/// has it), then sent in order with the same re-send as `send`.
+export async function sendBatch(
+  provider: SolanaProvider,
+  payer: PublicKey,
+  groups: TransactionInstruction[][],
+): Promise<string[]> {
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  const txs = groups.map((ixs) => {
+    const tx = new LegacyTx({ feePayer: payer, blockhash, lastValidBlockHeight }).add(...ixs);
+    return tx;
+  });
+  const signed: LegacyTx[] =
+    typeof provider.signAllTransactions === 'function'
+      ? await provider.signAllTransactions(txs)
+      : await Promise.all(txs.map((t) => provider.signTransaction!(t)));
+  const sigs: string[] = [];
+  for (const t of signed) {
+    const raw = t.serialize();
+    const sig = await connection.sendRawTransaction(raw, { preflightCommitment: 'confirmed', maxRetries: 0 });
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const st = (await connection.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
+      if (st?.err) throw new Error(`Transaction failed: ${JSON.stringify(st.err)}`);
+      if (st?.confirmationStatus === 'confirmed' || st?.confirmationStatus === 'finalized') break;
+      if ((await connection.getBlockHeight('confirmed')) > lastValidBlockHeight) {
+        throw new Error(`Expired before landing, nothing was spent: ${sig}`);
+      }
+      await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
+    }
+    sigs.push(sig);
+  }
+  return sigs;
 }
 
 /// The program's own error name when there is one, the wallet's message

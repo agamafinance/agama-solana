@@ -25,6 +25,8 @@ const enc = (s: string) => new TextEncoder().encode(s);
 const pda = (...seeds: Uint8Array[]) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 
 export const protocolPda = pda(enc('protocol.v2'));
+/// Where the Chainlink CRE receiver keeps its forwarder and report count.
+export const crePda = pda(enc('cre.v2'));
 export const usdcMint = pda(enc('usdc.v2'));
 export const lpMint = pda(enc('lp.v2'));
 export const poolUsdc = pda(enc('pool_usdc.v2'));
@@ -46,16 +48,24 @@ export interface Stock {
   custody: PublicKey;
 }
 
+/// The xStocks keep their `x` ticker; GLDY is Streamex's gold-backed token,
+/// about one ounce each, priced off Orca's GLDY/USDC pool.
 export const STOCKS: Stock[] = [
   ['TSLA', 'Tesla'],
   ['NVDA', 'NVIDIA'],
   ['AAPL', 'Apple'],
   ['SPY', 'S&P 500 ETF'],
-].map(([symbol, name]) => {
+  ['QQQ', 'Nasdaq 100 ETF'],
+  ['GOOGL', 'Alphabet'],
+  ['MSFT', 'Microsoft'],
+  ['AMZN', 'Amazon'],
+  ['META', 'Meta'],
+  ['GLDY', 'Gold, Streamex', 'GLDY'],
+].map(([symbol, name, ticker]) => {
   const stockMint = pda(enc('stock.v2'), symbolBytes(symbol));
   const market = pda(enc('market.v2'), stockMint.toBytes());
   const custody = pda(enc('custody.v2'), market.toBytes());
-  return { symbol, ticker: `${symbol}x`, name, stockMint, market, custody };
+  return { symbol, ticker: ticker ?? `${symbol}x`, name, stockMint, market, custody };
 });
 
 export type Kind = 'earn' | 'amplify';

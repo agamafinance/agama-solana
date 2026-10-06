@@ -1,11 +1,17 @@
 {
   "schedule": "0 * * * * *",
   "jupiterUrl": "https://lite-api.jup.ag/price/v3",
-  "orcaUrl": "https://api.orca.so/v2/solana/pools",
+  "mainnetRpc": "https://api.mainnet-beta.solana.com",
   "goldSpotUrl": "https://api.gold-api.com/price/XAU",
   "goldMaxDeviationBps": 300,
   "shareMaxAge": 300,
   "marketsPerReport": 3,
+  "solana": {
+    "chainSelectorName": "solana-devnet",
+    "receiverProgramId": "6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D",
+    "forwarderProgramId": "CXsKEJcs25TQEYU2e5jZ8QTPE3ffMLZhH6BWHrdcCCB5",
+    "forwarderState": "8QoomCQyPSkJ8WopJbX9B4HyvrFzziwvJdU8hZE6DCr9"
+  },
   "markets": [
     {
       "symbol": "TSLA",
@@ -57,11 +63,5 @@
       "kind": "gold",
       "orcaPool": "7z9ijqqafMPUuGKGRBq8BtC6AFzXX4PfKPy2ijbGmby3"
     }
-  ],
-  "solana": {
-    "chainSelectorName": "solana-devnet",
-    "receiverProgramId": "6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D",
-    "forwarderProgramId": "CXsKEJcs25TQEYU2e5jZ8QTPE3ffMLZhH6BWHrdcCCB5",
-    "forwarderState": "8QoomCQyPSkJ8WopJbX9B4HyvrFzziwvJdU8hZE6DCr9"
-  }
+  ]
 }

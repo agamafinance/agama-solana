@@ -3121,6 +3121,19 @@ export type AgamaSolana = {
       ]
     },
     {
+      "name": "priceSkipped",
+      "discriminator": [
+        75,
+        158,
+        73,
+        63,
+        232,
+        197,
+        199,
+        244
+      ]
+    },
+    {
       "name": "supplied",
       "discriminator": [
         137,
@@ -3774,6 +3787,34 @@ export type AgamaSolana = {
                 }
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "priceSkipped",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "priceE8",
+            "type": "u64"
+          },
+          {
+            "name": "publishTime",
+            "type": "i64"
+          },
+          {
+            "name": "currentPriceE8",
+            "type": "u64"
+          },
+          {
+            "name": "currentPublishTime",
+            "type": "i64"
           }
         ]
       }

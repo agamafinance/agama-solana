@@ -3115,6 +3115,19 @@
       ]
     },
     {
+      "name": "PriceSkipped",
+      "discriminator": [
+        75,
+        158,
+        73,
+        63,
+        232,
+        197,
+        199,
+        244
+      ]
+    },
+    {
       "name": "Supplied",
       "discriminator": [
         137,
@@ -3768,6 +3781,34 @@
                 }
               }
             }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PriceSkipped",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_e8",
+            "type": "u64"
+          },
+          {
+            "name": "publish_time",
+            "type": "i64"
+          },
+          {
+            "name": "current_price_e8",
+            "type": "u64"
+          },
+          {
+            "name": "current_publish_time",
+            "type": "i64"
           }
         ]
       }

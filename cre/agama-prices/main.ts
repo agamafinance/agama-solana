@@ -41,7 +41,8 @@ const gold = z.object({ symbol: z.string().max(8), kind: z.literal('gold'), orca
 const configSchema = z.object({
 	schedule: z.string(),
 	jupiterUrl: z.string(),
-	orcaUrl: z.string(),
+	/** Mainnet RPC: the GLDY price is read straight from Orca's whirlpool account. */
+	mainnetRpc: z.string(),
 	goldSpotUrl: z.string(),
 	/** Orca pool price is taken while within this many bps of spot. */
 	goldMaxDeviationBps: z.number(),
@@ -79,13 +80,13 @@ function newYork(t: Date): [number, number] {
 }
 
 /** NYSE regular session, holidays aside. */
-export function nyseOpen(t: Date): boolean {
+function nyseOpen(t: Date): boolean {
 	const [day, min] = newYork(t)
 	return day >= 1 && day <= 5 && min >= 9 * 60 + 30 && min < 16 * 60
 }
 
 /** Gold trades Sunday 6pm to Friday 5pm New York time. */
-export function goldOpen(t: Date): boolean {
+function goldOpen(t: Date): boolean {
 	const [day, min] = newYork(t)
 	if (day === 6) return false
 	if (day === 0) return min >= 18 * 60
@@ -106,6 +107,41 @@ const get = (req: HTTPSendRequester, url: string): any => {
 	return JSON.parse(new TextDecoder().decode(resp.body))
 }
 
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const fromBase64 = (s: string): Uint8Array => {
+	const clean = s.replace(/=+$/, '')
+	const out: number[] = []
+	let buf = 0
+	let bits = 0
+	for (const ch of clean) {
+		buf = (buf << 6) | B64.indexOf(ch)
+		bits += 6
+		if (bits >= 8) {
+			bits -= 8
+			out.push((buf >> bits) & 0xff)
+		}
+	}
+	return Uint8Array.from(out)
+}
+
+/** Orca whirlpool sqrt_price (u128 LE at offset 65), read on chain. */
+const whirlpoolSqrtPrice = (req: HTTPSendRequester, rpc: string, pool: string): bigint => {
+	const body = JSON.stringify({
+		jsonrpc: '2.0',
+		id: 1,
+		method: 'getAccountInfo',
+		params: [pool, { encoding: 'base64', dataSlice: { offset: 65, length: 16 } }],
+	})
+	const resp = req
+		.sendRequest({ url: rpc, method: 'POST' as const, headers: { 'Content-Type': 'application/json' }, body: new TextEncoder().encode(body) })
+		.result()
+	if (resp.statusCode !== 200) throw new Error(`rpc returned ${resp.statusCode}`)
+	const bytes = fromBase64(JSON.parse(new TextDecoder().decode(resp.body)).result.value.data[0])
+	let v = 0n
+	for (let i = 15; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i])
+	return v
+}
+
 const observe = (req: HTTPSendRequester, config: Config): Observation => {
 	const out: Observation = {}
 	const xs = config.markets.filter((m) => m.kind === 'xstock')
@@ -115,29 +151,32 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 		out[`${m.symbol}_b`] = 0
 		out[`${m.symbol}_t`] = 0
 	}
+	// Each source on its own: one failing must not take the others down.
 	if (xs.length) {
-		const body = get(req, `${config.jupiterUrl}?ids=${xs.map((m) => m.mint).join(',')}`)
-		for (const m of xs) {
-			const q = body[m.mint]
-			if (!q) continue
-			out[`${m.symbol}_a`] = Number(q.usdPrice) || 0 // the token, 24/7
-			out[`${m.symbol}_b`] = Number(q.stockData?.price) || 0 // the share
-			out[`${m.symbol}_t`] = q.stockData?.updatedAt ? Math.floor(Date.parse(q.stockData.updatedAt) / 1000) : 0
-		}
+		try {
+			const body = get(req, `${config.jupiterUrl}?ids=${xs.map((m) => m.mint).join(',')}`)
+			for (const m of xs) {
+				const q = body[m.mint]
+				if (!q) continue
+				out[`${m.symbol}_a`] = Number(q.usdPrice) || 0 // the token, 24/7
+				out[`${m.symbol}_b`] = Number(q.stockData?.price) || 0 // the share
+				out[`${m.symbol}_t`] = q.stockData?.updatedAt ? Math.floor(Date.parse(q.stockData.updatedAt) / 1000) : 0
+			}
+		} catch {}
 	}
 	if (golds.length) {
-		const spot = Number(get(req, config.goldSpotUrl).price) || 0
+		let spot = 0
+		try {
+			spot = Number(get(req, config.goldSpotUrl).price) || 0
+		} catch {}
 		for (const m of golds) {
-			const pool = get(req, `${config.orcaUrl}/${m.orcaPool}`).data
-			// sqrtPrice is Q64.64 of tokenB per tokenA in raw units (USDC 6, GLDY 9).
-			const sqrt = Number(BigInt(pool.sqrtPrice)) / 2 ** 64
-			const rawB_per_rawA = sqrt * sqrt
-			const decA = Number(pool.tokenA?.decimals ?? 6)
-			const decB = Number(pool.tokenB?.decimals ?? 9)
-			const bPerA = rawB_per_rawA * 10 ** (decA - decB)
-			const aIsUsd = pool.tokenMintA === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
-			out[`${m.symbol}_a`] = bPerA > 0 ? (aIsUsd ? 1 / bPerA : bPerA) : 0 // pool
 			out[`${m.symbol}_b`] = spot // gold spot, per ounce
+			try {
+				// tokenA = USDC (6 decimals), tokenB = GLDY (9): sqrt_price is Q64.64 of raw B per raw A.
+				const sqrt = Number(whirlpoolSqrtPrice(req, config.mainnetRpc, m.orcaPool)) / 2 ** 64
+				const gldyPerUsdc = sqrt * sqrt * 10 ** (6 - 9)
+				out[`${m.symbol}_a`] = gldyPerUsdc > 0 ? 1 / gldyPerUsdc : 0
+			} catch {}
 		}
 	}
 	return out
@@ -147,7 +186,7 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 // The DON's decision, from the agreed observation.
 // ---------------------------------------------------------------------------
 
-export function decide(config: Config, obs: Observation, now: Date): { symbol: string; price: number; open: boolean; source: string }[] {
+function decide(config: Config, obs: Observation, now: Date): { symbol: string; price: number; open: boolean; source: string }[] {
 	const nowS = Math.floor(now.getTime() / 1000)
 	const out = []
 	for (const m of config.markets) {
@@ -183,11 +222,17 @@ const onCron = (runtime: Runtime<Config>) => {
 	const now = runtime.now()
 
 	const fields = Object.fromEntries(
-		config.markets.flatMap((m) => ['a', 'b', 't'].map((k) => [`${m.symbol}_${k}`, median<number>()])),
+		config.markets.flatMap((m) => ['a', 'b', 't'].map((k) => [`${m.symbol}_${k}`, median<number>])),
 	)
-	const obs = new HTTPClient()
-		.sendRequest(runtime, observe, ConsensusAggregationByFields<Observation>(fields as any))(config)
-		.result()
+	let obs: Observation
+	try {
+		const agg = ConsensusAggregationByFields<Observation>(fields as any)
+		const call = new HTTPClient().sendRequest(runtime, observe, agg)
+		obs = call(config).result()
+	} catch (e: any) {
+		runtime.log(`observe failed: ${e?.message} ${String(e?.stack ?? '').slice(0, 600)}`)
+		throw e
+	}
 
 	const decided = decide(config, obs, now)
 	for (const d of decided) runtime.log(`${d.symbol.padEnd(5)} ${d.price.toFixed(2)} ${d.open ? 'in session' : 'off hours'} (${d.source})`)
@@ -203,6 +248,17 @@ const onCron = (runtime: Runtime<Config>) => {
 
 	const publishTime = BigInt(Math.floor(now.getTime() / 1000))
 	const sigs: string[] = []
+
+	// A heartbeat first: an empty report that only stamps `cre.last_report_at`.
+	// On devnet the first write of a run is consistently the one that does not
+	// land (it goes out minutes after the trigger), so it should carry no price.
+	const beat = agama.writeReportFromPriceReport(
+		runtime,
+		{ updates: [] },
+		[solanaAccountMeta(sol.forwarderState, true), solanaAccountMeta(authority.toBase58()), solanaAccountMeta(cre.toBase58(), true)],
+		{ computeLimit: 100_000 },
+	)
+	runtime.log(`heartbeat ${beat.txStatus === SolanaTxStatus.SUCCESS ? 'ok' : `missed: ${String(beat.errorMessage).slice(0, 80)}`}`)
 	for (let i = 0; i < decided.length; i += config.marketsPerReport) {
 		const group = decided.slice(i, i + config.marketsPerReport)
 		const updates: PriceUpdate[] = group.map((d) => ({

@@ -2,7 +2,7 @@ import clsx from 'clsx';
 
 type TokenInfo = { bg: string; fg: string; symbol: string; logo?: string };
 
-/// The coins this deployment shows: USDC and the four xStock stand-ins, each
+/// The coins this deployment shows: USDC, the xStock stand-ins and GLDY, each
 /// with the mark of the real token it tracks.
 const TOKENS: Record<string, TokenInfo> = {
   USDC: { bg: '#2775CA', fg: '#FFFFFF', symbol: '$', logo: '/logos/usdc.svg' },
@@ -10,6 +10,12 @@ const TOKENS: Record<string, TokenInfo> = {
   NVDAx: { bg: '#76B900', fg: '#fff', symbol: 'N', logo: '/stocks/nvdax.png' },
   SPYx: { bg: '#1B1BFF', fg: '#fff', symbol: 'S', logo: '/stocks/spyx.png' },
   AAPLx: { bg: '#000000', fg: '#fff', symbol: 'A', logo: '/stocks/aaplx.svg' },
+  QQQx: { bg: '#0e7a5f', fg: '#fff', symbol: 'Q', logo: '/stocks/qqqx.png' },
+  GOOGLx: { bg: '#4285F4', fg: '#fff', symbol: 'G', logo: '/stocks/googlx.png' },
+  MSFTx: { bg: '#737373', fg: '#fff', symbol: 'M', logo: '/stocks/msftx.png' },
+  AMZNx: { bg: '#FF9900', fg: '#000', symbol: 'A', logo: '/stocks/amznx.png' },
+  METAx: { bg: '#0866FF', fg: '#fff', symbol: 'M', logo: '/stocks/metax.png' },
+  GLDY: { bg: '#C3A552', fg: '#fff', symbol: 'G', logo: '/stocks/gldy.svg' },
 };
 
 const FALLBACK = { bg: '#3B4256', fg: '#FFFFFF', symbol: '?' };

@@ -101,7 +101,7 @@ export default function PrivatePage() {
           hold and what you send.
         </p>
         <div className="mt-7 flex flex-wrap gap-8">
-          <Stat label="Tokens" value="6" sub="USDC, 4 stocks, the LP token" />
+          <Stat label="Tokens" value={String(PRIVATE_TOKENS.length)} sub={`USDC, ${PRIVATE_TOKENS.length - 2} stocks and gold, the LP token`} />
           <Stat label="Keys" value={unlocked ? 'Unlocked' : 'Locked'} sub="One signature, kept in memory only" />
         </div>
       </Hero>

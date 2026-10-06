@@ -80,7 +80,7 @@ export function MarketCards({
   markets, sel, onSelect, connected,
 }: { markets: Market[]; sel: number; onSelect: (i: number) => void; connected: boolean }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
       {markets.map((m, i) => (
         <button
           key={m.stock.symbol}
@@ -111,6 +111,27 @@ export function MarketCards({
           </div>
         </button>
       ))}
+    </div>
+  );
+}
+
+/// Where the prices come from: a Chainlink CRE workflow, its last report and
+/// how many it has written. Honest about the forwarder it goes through.
+export function CreBadge({ cre }: { cre: { simulation: boolean; reports: number; lastReportAt: number } | undefined }) {
+  if (!cre) return null;
+  const age = Math.max(0, Math.floor(Date.now() / 1000) - cre.lastReportAt);
+  const ageText = cre.lastReportAt === 0 ? 'no report yet' : age < 90 ? `${age} s ago` : `${Math.round(age / 60)} min ago`;
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-fg-muted" data-testid="cre-badge">
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-[#375BD2]/10 px-2.5 py-1 font-medium text-[#375BD2]">
+        <span className="h-1.5 w-1.5 rounded-full bg-[#375BD2]" />
+        Priced by Chainlink CRE
+      </span>
+      <span>
+        Every minute the DON reads the xStocks on Jupiter and Orca&apos;s GLDY pool, agrees on the medians and writes a
+        signed report. Last report {ageText}, {cre.reports.toLocaleString('en-US')} so far
+        {cre.simulation ? ', relayed by the CRE simulator through Chainlink\'s devnet mock forwarder.' : ', through the Keystone Forwarder.'}
+      </span>
     </div>
   );
 }

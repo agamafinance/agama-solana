@@ -10,7 +10,7 @@ import {
   ago, borrowRateBps, errorText, ix, pct, px, qty, send, stockValue, usd, useSnapshot,
 } from '@/lib/solana/useSolana';
 import {
-  AgentsCard, AmountBox, card, Hero, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
+  AgentsCard, AmountBox, card, Hero, CreBadge, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
   Stat, Status, toDecimal,
 } from '@/components/solana/ui';
 
@@ -124,6 +124,7 @@ export default function SolanaEarnPage() {
       <Panel>
         {error && !snap && <p className="text-[13px] text-[#b4571f]">{error}</p>}
         {snap && <MarketCards markets={snap.markets} sel={sel} onSelect={setSel} connected={!!address} />}
+        {snap && <CreBadge cre={snap.cre} />}
 
         <div className="grid gap-5 lg:grid-cols-[1fr_1fr] items-start">
           <div className={card}>
@@ -256,9 +257,10 @@ export default function SolanaEarnPage() {
         </div>
 
         <p className="text-[12px] text-fg-muted">
-          Devnet: the stocks and USDC are stand-ins minted by the Faucet tab. Prices are relayed from the live
-          xStocks through Jupiter (the share price while NYSE trades, the token&apos;s own price outside it), and
-          swaps settle at that price minus 5 bps.
+          Devnet: the stocks, GLDY and USDC are stand-ins minted by the Faucet tab; no xStock or GLDY faucet exists
+          on devnet, and GLDY itself is permissioned. Prices are real: a Chainlink CRE workflow reads the live xStocks
+          on Jupiter (the share price while NYSE trades, the token&apos;s own price outside it) and GLDY off Orca&apos;s
+          pool, and swaps settle at that price minus 5 bps.
         </p>
       </Panel>
     </>

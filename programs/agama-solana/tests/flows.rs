@@ -1135,22 +1135,41 @@ fn cre_reports_price_the_markets() {
     let cfg: CreConfig = w.load(&c.cre);
     assert_eq!(cfg.reports, 1);
 
-    // The same bounds as the keeper: a 20% jump in one report is refused.
+    // The same bounds as the keeper, but a bad price is skipped rather than
+    // taking the report down: TSLA jumps 20% (skipped), GLDY moves (applied).
     w.warp(30);
     let now = w.now();
+    let up = |s: &str, p: u64, t: i64| PriceUpdate {
+        symbol: sym(s),
+        price_e8: p,
+        publish_time: t,
+        session_open: true,
+    };
+    let ix = cre_report_ix(
+        &c,
+        &relayer.pubkey(),
+        OWNER,
+        &[tsla.market, gldy.market],
+        vec![up("TSLA", 492 * PX, now), up("GLDY", 4_170 * PX, now)],
+    );
+    w.send(&[ix], &relayer).unwrap();
+    assert_eq!(w.market(&tsla).price_e8, 410 * PX);
+    assert_eq!(w.market(&gldy).price_e8, 4_170 * PX);
+
+    // A report older than the price already there is skipped too: the keeper,
+    // or a faster report, got there first.
+    w.warp(30);
+    let now = w.now();
+    w.push(&tsla, 412 * PX, now, true).unwrap();
     let ix = cre_report_ix(
         &c,
         &relayer.pubkey(),
         OWNER,
         &[tsla.market],
-        vec![PriceUpdate {
-            symbol: sym("TSLA"),
-            price_e8: 492 * PX,
-            publish_time: now,
-            session_open: true,
-        }],
+        vec![up("TSLA", 411 * PX, now - 10)],
     );
-    err_has(w.send(&[ix], &relayer), "PriceJumpTooLarge");
+    w.send(&[ix], &relayer).unwrap();
+    assert_eq!(w.market(&tsla).price_e8, 412 * PX);
 }
 
 #[test]

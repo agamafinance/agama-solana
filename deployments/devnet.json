@@ -15,7 +15,8 @@
       "custody": "8abS99r2qDLueSRhg3zP16zNdhyRCVh6NZ4HoPUyY1hq",
       "ltvBps": 3000,
       "ltBps": 4000,
-      "tracks": "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB"
+      "tracks": "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
     },
     "NVDA": {
       "market": "EoxMLvYP2F8A3hRLoRB33fAvkWP2mwxguFJFn3CfE5Mc",
@@ -23,7 +24,8 @@
       "custody": "32xDyNhXwWzsMJpVRzUUWDrLsBbxXvAtvnHkZjg3Pfc2",
       "ltvBps": 3000,
       "ltBps": 4000,
-      "tracks": "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh"
+      "tracks": "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
     },
     "AAPL": {
       "market": "7peQzqFeSAAJiLAVFZXcLHTCfj6R2Uh31Ec5Lw1oBgG9",
@@ -31,7 +33,8 @@
       "custody": "2ojkEZSUFQCbvfX9zj64ckWB2cfmCPjmcFQABbmPfnQi",
       "ltvBps": 3500,
       "ltBps": 4500,
-      "tracks": "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp"
+      "tracks": "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
     },
     "SPY": {
       "market": "2qspGdu1Dh9D2FTHimuSBe7utnhczFMej7hHom44Q4EL",
@@ -39,7 +42,62 @@
       "custody": "BLaQC3Svywq6EMC4haoYbwWaxdZQ5KGjv3ytUxqpbnmP",
       "ltvBps": 5000,
       "ltBps": 6000,
-      "tracks": "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W"
+      "tracks": "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
+    },
+    "QQQ": {
+      "market": "E9pgpvX5iw15dMhyFuHJunL5r2NiwPkRLuJsexunvm42",
+      "stockMint": "FFcRGpNTg9QrBDcF2PCdUQYJKHwihy2fhtHkYx5kZjZs",
+      "custody": "32JabZ49aBo3ZpBetzdiE13vFXc5wyCRY98woyYeCBtZ",
+      "ltvBps": 5000,
+      "ltBps": 6000,
+      "tracks": "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
+    },
+    "GOOGL": {
+      "market": "7arjY12XJyjL8oErTFNs2NZqvxnkGSb9N3VrBsSTvWHv",
+      "stockMint": "J2U5Mu7fBGqJQcFj953nfPqkxvV3aavweghncJKWycwi",
+      "custody": "6mkDFro93bBrfysowFzGZBGMQHhZw9KSnk9kwqEXkwgs",
+      "ltvBps": 3500,
+      "ltBps": 4500,
+      "tracks": "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
+    },
+    "MSFT": {
+      "market": "6efYf3pCah7FL4sxMhp6R5Qy6DFriYUWpsaKABtj1ovo",
+      "stockMint": "B92s26atkv1MGhwd4XnRsc4L7vDEQZgS4F22MxdBi5J6",
+      "custody": "4NX2B33rUtA6bd43LxxNQY2qkp7bMmEYMgRdXTosUrUg",
+      "ltvBps": 3500,
+      "ltBps": 4500,
+      "tracks": "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
+    },
+    "AMZN": {
+      "market": "3GgYTyTPpa1jFdTzFUgvLnVP29VPTirKQKabMgtcCSrE",
+      "stockMint": "34GMbvoQ3fYXMj1uE9Gh5G26s4aWKyLCU3MxvKM6BJ1S",
+      "custody": "2oyjFHj1Lh4H5Ghzr42KTx8D3JoDHiABczavxRuGu4UA",
+      "ltvBps": 3500,
+      "ltBps": 4500,
+      "tracks": "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
+    },
+    "META": {
+      "market": "BYonKR6NnH5eYkb7bGwwHKjKansTvigiUXwMUThzH6YD",
+      "stockMint": "2ivVef5iGDi3ziszuD2ZMUjMUWP2iTSwhnekWmBYznAG",
+      "custody": "9ipWN1sWp5h2nV8mcbAk4Hg3UWkokQU7dnc8hL7GysUB",
+      "ltvBps": 3000,
+      "ltBps": 4000,
+      "tracks": "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
+    },
+    "GLDY": {
+      "market": "4xDDffjyNARos7Rj9uddaPDxfhukBFK9cH8ER9iPtMsd",
+      "stockMint": "GrAh3jDYXdAzmmPTJaQYzmL5sc7F79t6cJovt5xRRTob",
+      "custody": "C1SCw8CPEHhc9jTXfpmJXm1mD664ich4bSq48robpYPm",
+      "ltvBps": 6000,
+      "ltBps": 7000,
+      "tracks": "orca:7z9ijqqafMPUuGKGRBq8BtC6AFzXX4PfKPy2ijbGmby3",
+      "cre": "61qn2cfhefepRQvdkA69zPea2S4axY2BLRroZfGDHFgR"
     }
   }
 }

@@ -322,14 +322,27 @@ pub mod agama_solana {
             )
             .map_err(|_| error!(AgamaError::MarketNotInReport))?;
             require_keys_eq!(ai.key(), expected, AgamaError::MarketNotInReport);
-            m.apply_price(u.price_e8, u.publish_time, u.session_open, now)?;
-            m.exit(&crate::ID)?;
-            emit!(PricePushed {
-                market: ai.key(),
-                price_e8: u.price_e8,
-                publish_time: u.publish_time,
-                session_open: u.session_open
-            });
+            // A report that arrives after a fresher price, or one outside the
+            // bounds, is skipped and said so: it must not take the other
+            // markets of the report down with it.
+            match m.apply_price(u.price_e8, u.publish_time, u.session_open, now) {
+                Ok(()) => {
+                    m.exit(&crate::ID)?;
+                    emit!(PricePushed {
+                        market: ai.key(),
+                        price_e8: u.price_e8,
+                        publish_time: u.publish_time,
+                        session_open: u.session_open
+                    });
+                }
+                Err(_) => emit!(PriceSkipped {
+                    market: ai.key(),
+                    price_e8: u.price_e8,
+                    publish_time: u.publish_time,
+                    current_price_e8: m.price_e8,
+                    current_publish_time: m.price_time,
+                }),
+            }
         }
         cre.reports += 1;
         cre.last_report_at = now;
@@ -1317,6 +1330,15 @@ pub struct PricePushed {
     pub price_e8: u64,
     pub publish_time: i64,
     pub session_open: bool,
+}
+
+#[event]
+pub struct PriceSkipped {
+    pub market: Pubkey,
+    pub price_e8: u64,
+    pub publish_time: i64,
+    pub current_price_e8: u64,
+    pub current_publish_time: i64,
 }
 
 #[event]

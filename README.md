@@ -2,8 +2,9 @@
 
 Deposit a tokenized stock, get more of it back. Live on **Solana devnet**.
 
-The xStocks (TSLAx, NVDAx, AAPLx, SPYx and the rest) are native SPL tokens on
-Solana and trade around the clock, yet a holder can only hold them. Agama turns
+The xStocks (TSLAx, NVDAx, AAPLx, SPYx, QQQx, GOOGLx, MSFTx, AMZNx, METAx) and
+Streamex's gold-backed GLDY are native tokens on Solana and trade around the
+clock, yet a holder can only hold them. Agama turns
 them into a position that grows: deposit the stock, the protocol borrows USDC
 against it, puts the USDC to work in the Agama private credit vault, and
 permissionless agents turn the yield back into **more of the stock**. What
@@ -83,11 +84,12 @@ flowchart TB
 - **The buffer goes before the liquidator.** `liquidate` first repays out of
   the position's vault shares; only if that does not restore health does the
   liquidator repay half the debt and take stock at a 5% bonus.
-- **Priced around the clock, honestly.** In NYSE session the keeper relays the
-  share price; outside it, the xStock token's own price on Solana, flagged
-  off-hours so LTV and threshold both tighten by 5 points. A push can move a
-  price by 15% at most, publish times only move forward, and only a stale price
-  stops a borrow.
+- **Priced by Chainlink CRE, around the clock, honestly.** A CRE workflow
+  prices every market (see below). In NYSE session it takes the share price;
+  outside it, the xStock token's own price on Solana, flagged off-hours so LTV
+  and threshold both tighten by 5 points. A price can move 15% at most per
+  update, publish times only move forward, and only a stale price stops a
+  borrow.
 - **No buttons for the automation.** Every position records which agent last
   acted, what it did and when. `rebalance`, `compound` and `liquidate` take any
   signer; the keeper is one caller among many.
@@ -101,6 +103,58 @@ signature derives the address. The X Layer `compoundIntoStock` needed the caller
 to pass the exact swap amount and calldata, with an on-chain slippage floor
 against griefing; here the swap is priced inside the instruction off the same
 oracle, so an agent has nothing to choose and nothing to skim.
+
+## Chainlink CRE: the price layer
+
+`cre/agama-prices` is a Chainlink Runtime Environment workflow, and the program
+is its receiver.
+
+```
+cron, every minute
+  each DON node, over HTTP:
+    Jupiter price API   the 9 xStocks: the token's own price and the share's
+    Solana mainnet RPC  Orca's GLDY/USDC whirlpool account, sqrt_price at offset 65
+    gold spot           a guard on that thin pool (3% band)
+  consensus             median of every field across the nodes
+  decision, DON clock   in session or not (NYSE hours, gold 24/5), which source
+  Solana write          a heartbeat, then one signed report per 3 markets
+    -> Keystone Forwarder -> agama.on_report -> markets priced
+```
+
+- **The receiver checks who is calling.** `on_report` requires the configured
+  forwarder state, the forwarder's authority PDA for this program as signer,
+  and, once set, the workflow owner from the report metadata. Then it decodes
+  the Borsh `PriceReport` and prices the markets listed after `cre` in the
+  accounts, with the same `apply_price` the keeper used.
+- **One bad price does not sink the report.** A price older than the one
+  already there, or past the 15% bound, is skipped with a `PriceSkipped` event;
+  the other markets of the report still update.
+- **Three markets per report.** A Solana transaction leaves the forwarder about
+  265 bytes once its accounts are paid, and every market is another account.
+- **Why a heartbeat.** On devnet the first write of a run went out minutes after
+  the trigger and never landed, three runs out of three. The run now opens with
+  an empty report that only stamps `cre.last_report_at`, which doubles as the
+  liveness the app shows.
+- **Where it runs today.** The organisation is still gated for CRE deploys, so
+  the workflow runs through the CRE simulator (`cre/run-devnet.sh`, every
+  minute under launchd), which executes the same WASM, does the same HTTP and
+  consensus steps, and broadcasts through Chainlink's **mock** forwarder on
+  devnet. The mock does not verify DON signatures and the simulator puts a
+  placeholder workflow owner in the metadata, so until the DON runs it, reports
+  are trusted only as far as the per-update bounds. With Deploy Access:
+  `cre workflow deploy agama-prices --target production-settings`, then
+  `CRE_MODE=production CRE_WORKFLOW_OWNER=0x... pnpm setup` points the receiver
+  at the live Keystone Forwarder and pins the owner.
+- **Tested against Chainlink's own forwarder.** The LiteSVM suite loads the mock
+  forwarder program (dumped from devnet by `scripts/fetch-fixtures.sh`) and
+  sends real reports through it: prices applied, a 20% jump skipped while the
+  rest of the report lands, a stale report skipped, another workflow owner, a
+  forged `forwarder_authority` and a market missing from the accounts refused.
+  `cre/simulate-local.sh` runs the whole workflow against a local validator
+  with the forwarder cloned in.
+
+The keeper now runs the agents only (`--agents-only`); its `push_price` stays
+as the fallback path, bounded the same way.
 
 ## Confidential balances
 
@@ -155,24 +209,27 @@ and checked exactly.
 
 ## Devnet, said plainly
 
-- **Stand-in tokens.** USDC and the four stocks are mints the program controls,
-  with a public faucet. The prices are real: they track the live xStocks.
+- **Stand-in tokens.** USDC, the nine xStocks and GLDY are mints the program
+  controls, with a public faucet: no xStock or GLDY faucet exists on devnet, and
+  the real GLDY is permissioned (frozen-by-default accounts behind Streamex's
+  KYC allowlist). The prices are real: they track the live tokens.
 - **Swaps settle at the oracle price minus 5 bps.** Devnet has no xStock
   liquidity. On mainnet that leg is a Jupiter route.
 - **The vault's coupons are minted.** There is no credit book on devnet, so when
   the vault pays out more than it took in, the difference is minted and counted
   in `coupons_paid`. It is the only place the program creates dollars.
-- **The keeper is trusted for the session flag**, bounded for the price.
+- **The session flag comes from the workflow's clock**, the price is bounded.
 - **Token-2022 throughout**, like the mainnet xStocks.
 - Pyth's public Hermes endpoint now answers 401 without an API key, so the
-  keeper reads Jupiter's price API, which returns both the token price and the
-  underlying share's price for every xStock.
+  workflow reads Jupiter's price API, which returns both the token price and the
+  underlying share's price for every xStock. Orca's API answers 403 to the CRE
+  HTTP client, so GLDY is read from the whirlpool account itself.
 
 ## Run it
 
 ```bash
 anchor build                      # or: cargo build-sbf --manifest-path programs/agama-solana/Cargo.toml
-cargo test                        # 12 LiteSVM flows against the built program, plus unit tests
+./scripts/fetch-fixtures.sh && cargo test  # 14 LiteSVM flows, incl. CRE through Chainlink's forwarder
 ./scripts/check.sh                # everything CI runs, before pushing
 pnpm install
 pnpm setup                        # initialize, 4 markets, first prices, seed the pool (idempotent)
@@ -181,7 +238,9 @@ pnpm e2e:local                    # throwaway validator: setup, the e2e, the age
                                   # the real keeper with prices moved on purpose (17 checks),
                                   # then the private path (12 checks). VALIDATOR=agave 4.3+
 pnpm state                        # live pool, vault, prices and their age, positions, keeper
-pnpm keeper                       # prices + agents, every 30 s
+pnpm keeper --agents-only         # the agents, every 30 s
+./cre/run-devnet.sh               # one run of the CRE price workflow on devnet
+VALIDATOR=... ./cre/simulate-local.sh  # the workflow against a local validator
 ```
 
 The LiteSVM suite (`programs/agama-solana/tests/flows.rs`) covers: Earn opening
@@ -209,7 +268,9 @@ close.
 | | Who | What |
 |---|---|---|
 | `initialize`, `add_market`, `set_params`, `set_market` | admin | Protocol, mints, pool and vault accounts; markets and their terms |
-| `push_price` | keeper | Price, publish time, session flag; bounded |
+| `on_report` | Chainlink Keystone Forwarder | CRE price reports, a few markets each; bounded |
+| `set_cre` | admin | Forwarder program and state, workflow owner, simulation flag |
+| `push_price` | keeper | Fallback price path; same bounds |
 | `faucet_usdc`, `faucet_stock` | anyone | Devnet funds |
 | `supply`, `withdraw` | lender | USDC in and out of the pool, LP token |
 | `earn_deposit`, `earn_set_target`, `earn_close` | owner | Open or top up at a level, move the slider, close |

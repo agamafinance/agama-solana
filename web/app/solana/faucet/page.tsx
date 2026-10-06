@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { TokenIcon } from '@/components/icons/TokenIcon';
 import { FAUCET_STOCK, FAUCET_USDC, STOCKS } from '@/lib/solana/config';
 import { useSolanaWallet } from '@/lib/solana/WalletProvider';
-import { errorText, ix, qty, send, usd, useSnapshot } from '@/lib/solana/useSolana';
+import { errorText, ix, qty, sendBatch, usd, useSnapshot } from '@/lib/solana/useSolana';
 import { card, Hero, Panel, primaryBtn, Status } from '@/components/solana/ui';
 
 export default function SolanaFaucetPage() {
@@ -19,8 +19,14 @@ export default function SolanaFaucetPage() {
     setBusy(true);
     setStatus({ text: 'Minting...' });
     try {
-      const sig = await send(provider, address, await ix.faucet(address));
-      setStatus({ text: 'Done.', sig });
+      // Eleven mints with their token accounts do not fit one transaction:
+      // four per transaction, approved once.
+      const all = await ix.faucet(address);
+      const groups: typeof all[] = [];
+      for (let i = 0; i < all.length; i += 4) groups.push(all.slice(i, i + 4));
+      setStatus({ text: `Minting, ${groups.length} transactions in one approval...` });
+      const sigs = await sendBatch(provider, address, groups);
+      setStatus({ text: `Done. ${sigs.length} transactions.`, sig: sigs[sigs.length - 1] });
       refresh();
     } catch (e) {
       setStatus({ text: errorText(e) });
