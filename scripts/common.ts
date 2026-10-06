@@ -29,8 +29,9 @@ export function symbolBytes(sym: string): number[] {
 
 /// The markets. xStocks keep the X Layer terms (a loop at L carries an LTV of
 /// (L - 1) / L: 1.43x on TSLA and NVDA, 1.54x on AAPL, 2x on SPY and QQQ) and
-/// track their mainnet xStock. XAU tracks XAUt0 (Tether Gold on Solana, one
-/// ounce per token): gold moves less, so it lends at 60%.
+/// track their mainnet xStock. GLDY is Streamex's gold-backed token (about one
+/// ounce each, priced off Orca's GLDY/USDC pool): gold moves less, so it lends
+/// at 60%.
 export const MARKETS = [
   { symbol: "TSLA", ltv: 3000, lt: 4000, kind: "xstock", xstock: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB" },
   { symbol: "NVDA", ltv: 3000, lt: 4000, kind: "xstock", xstock: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh" },
@@ -41,7 +42,7 @@ export const MARKETS = [
   { symbol: "MSFT", ltv: 3500, lt: 4500, kind: "xstock", xstock: "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX" },
   { symbol: "AMZN", ltv: 3500, lt: 4500, kind: "xstock", xstock: "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg" },
   { symbol: "META", ltv: 3000, lt: 4000, kind: "xstock", xstock: "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu" },
-  { symbol: "XAU", ltv: 6000, lt: 7000, kind: "gold", xstock: "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P" },
+  { symbol: "GLDY", ltv: 6000, lt: 7000, kind: "gold", orcaPool: "7z9ijqqafMPUuGKGRBq8BtC6AFzXX4PfKPy2ijbGmby3" },
 ] as const;
 
 /// Chainlink CRE forwarders on devnet: the CLI's mock (what `cre workflow
@@ -122,7 +123,7 @@ export function nyseOpen(at = new Date()): boolean {
 export type Quote = { symbol: string; priceE8: bigint; publishTime: number; sessionOpen: boolean; source: string };
 
 export async function fetchQuotes(): Promise<Quote[]> {
-  const xs = MARKETS.filter((m) => m.kind === "xstock");
+  const xs = MARKETS.filter((m) => m.kind === "xstock") as readonly { symbol: string; xstock: string }[];
   const ids = xs.map((m) => m.xstock).join(",");
   const res = await fetch(`https://lite-api.jup.ag/price/v3?ids=${ids}`);
   if (!res.ok) throw new Error(`jupiter price ${res.status}`);
@@ -146,19 +147,20 @@ export async function fetchQuotes(): Promise<Quote[]> {
       source: useShare ? "share (NYSE session)" : "xStock token on Solana",
     });
   }
-  // XAU: XAUt0 on Jupiter, guarded by the gold spot price (fallback path only:
-  // the CRE workflow prices it in normal operation).
-  for (const m of MARKETS.filter((m) => m.kind === "gold")) {
+  // GLDY: Orca's GLDY/USDC whirlpool, guarded by the gold spot price.
+  for (const m of MARKETS.filter((m) => m.kind === "gold") as readonly { symbol: string; orcaPool: string }[]) {
     try {
-      const q = (await (await fetch(`https://lite-api.jup.ag/price/v3?ids=${m.xstock}`)).json())[m.xstock];
+      const pool = (await (await fetch(`https://api.orca.so/v2/solana/pools/${m.orcaPool}`)).json()).data;
       const spot = Number((await (await fetch("https://api.gold-api.com/price/XAU")).json()).price) || 0;
-      const token = Number(q?.usdPrice) || 0;
-      const price = token > 0 && (spot === 0 || Math.abs(token / spot - 1) < 0.03) ? token : spot;
+      const sqrt = Number(BigInt(pool.sqrtPrice)) / 2 ** 64;
+      const usdcPerGldy = 1 / (sqrt * sqrt * 10 ** (6 - 9));
+      const usePool = spot > 0 && Math.abs(usdcPerGldy / spot - 1) < 0.03;
+      const price = usePool ? usdcPerGldy : spot;
       if (!(price > 0)) continue;
       const ny = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
       const d = ny.getDay(), min = ny.getHours() * 60 + ny.getMinutes();
       const goldOpen = d === 6 ? false : d === 0 ? min >= 18 * 60 : d === 5 ? min < 17 * 60 : true;
-      out.push({ symbol: m.symbol, priceE8: BigInt(Math.round(price * 1e8)), publishTime: now, sessionOpen: goldOpen, source: price === token ? "XAUt0 on Jupiter" : "gold spot" });
+      out.push({ symbol: m.symbol, priceE8: BigInt(Math.round(price * 1e8)), publishTime: now, sessionOpen: goldOpen, source: usePool ? "Orca GLDY pool" : "gold spot" });
     } catch {}
   }
   return out;

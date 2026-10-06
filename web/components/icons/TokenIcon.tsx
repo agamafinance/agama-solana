@@ -2,7 +2,7 @@ import clsx from 'clsx';
 
 type TokenInfo = { bg: string; fg: string; symbol: string; logo?: string };
 
-/// The coins this deployment shows: USDC, the xStock stand-ins and XAUt0, each
+/// The coins this deployment shows: USDC, the xStock stand-ins and GLDY, each
 /// with the mark of the real token it tracks.
 const TOKENS: Record<string, TokenInfo> = {
   USDC: { bg: '#2775CA', fg: '#FFFFFF', symbol: '$', logo: '/logos/usdc.svg' },
@@ -15,7 +15,7 @@ const TOKENS: Record<string, TokenInfo> = {
   MSFTx: { bg: '#737373', fg: '#fff', symbol: 'M', logo: '/stocks/msftx.png' },
   AMZNx: { bg: '#FF9900', fg: '#000', symbol: 'A', logo: '/stocks/amznx.png' },
   METAx: { bg: '#0866FF', fg: '#fff', symbol: 'M', logo: '/stocks/metax.png' },
-  XAUt0: { bg: '#C3A552', fg: '#fff', symbol: 'G', logo: '/stocks/xaut0.png' },
+  GLDY: { bg: '#C3A552', fg: '#fff', symbol: 'G', logo: '/stocks/gldy.svg' },
 };
 
 const FALLBACK = { bg: '#3B4256', fg: '#FFFFFF', symbol: '?' };

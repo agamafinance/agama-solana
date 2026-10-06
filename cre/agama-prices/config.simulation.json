@@ -3,6 +3,7 @@
   "jupiterUrl": "https://lite-api.jup.ag/price/v3",
   "dexscreenerUrl": "https://api.dexscreener.com/tokens/v1/solana",
   "sourceMaxDeviationBps": 200,
+  "mainnetRpc": "https://api.mainnet-beta.solana.com",
   "goldSpotUrl": "https://api.gold-api.com/price/XAU",
   "goldMaxDeviationBps": 300,
   "shareMaxAge": 120,
@@ -105,13 +106,9 @@
       }
     },
     {
-      "symbol": "XAU",
+      "symbol": "GLDY",
       "kind": "gold",
-      "mint": "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P",
-      "streams": {
-        "xau": "0x0003036191b204b5ba40ae93b6004917000f66d8527b64bad7f6b1d346ccdce9",
-        "usdt": "0x00032874077216155926e26c159c1c20a572921371d9de605fe9633e48d136f9"
-      }
+      "orcaPool": "7z9ijqqafMPUuGKGRBq8BtC6AFzXX4PfKPy2ijbGmby3"
     }
   ],
   "dataStreamsUrl": "https://api.testnet-dataengine.chain.link"

@@ -3,7 +3,7 @@
 Deposit a tokenized stock, get more of it back. Live on **Solana devnet**.
 
 The xStocks (TSLAx, NVDAx, AAPLx, SPYx, QQQx, GOOGLx, MSFTx, AMZNx, METAx) and
-Tether Gold (XAUt0, one ounce per token) are native tokens on Solana and trade around the
+Streamex's gold-backed GLDY are native tokens on Solana and trade around the
 clock, yet a holder can only hold them. Agama turns
 them into a position that grows: deposit the stock, the protocol borrows USDC
 against it, puts the USDC to work in the Agama private credit vault, and
@@ -26,7 +26,7 @@ flowchart TB
 
     subgraph program["AGAMA PROGRAM (one Anchor program)"]
         POS["Position PDA<br/>one per owner, market and product<br/>the borrower of record"]
-        MKT["Market PDA x10<br/>9 xStocks + XAU<br/>LTV, threshold, off-hours buffer, price"]
+        MKT["Market PDA x10<br/>9 xStocks + GLDY<br/>LTV, threshold, off-hours buffer, price"]
         POOL["Lending pool<br/>USDC, kinked rate, LP token"]
         VAULT["Agama private credit vault<br/>NAV per share, the Earn buffer"]
         PROTO["Protocol PDA<br/>signs for the pool, the vault,<br/>every custody and mint"]
@@ -117,9 +117,10 @@ cron, every minute (one group of three markets per run, in turn)
       Streams           (RWA Advanced v11), one signed bulk request; the
                         marketStatus field picks the live session
     Jupiter price API   the 9 xStocks: the token's own price and the share's
-    DexScreener         the deepest pair of each token: a second,
+    DexScreener         the deepest USDC pair of each xStock: a second,
                         independent token price (Raydium, Meteora...)
-    gold spot           a guard on XAUt0 (3% band), and the last resort
+    Solana mainnet RPC  Orca's GLDY/USDC whirlpool account, sqrt_price at offset 65
+    gold spot           a guard on that thin pool (3% band)
   consensus             median of every field across the nodes
   decision, DON clock   in session or not (NYSE hours, gold 24/5), which source
   Solana write          one signed report, this minute's group of 3 markets
@@ -130,10 +131,8 @@ cron, every minute (one group of three markets per run, in turn)
   DEX pair to agree within 2% (then their mean), or comes from the one that
   answered; if they disagree, the market is skipped this run and keeps its
   last price. In session the share price leads only while it is within 3% of
-  that token price. XAU is XAUt0's price (Jupiter and its DEX pair), kept
-  only within 3% of gold spot, or falls back to spot. Data Streams XAU/USDT x
-  USDT/USD is wired in and leads once the credentials cover those feeds (today
-  they answer 401: not on our testnet plan).
+  that token price. GLDY needs the Orca pool within 3% of gold spot, or falls
+  back to spot.
 - **Chainlink Data Streams lead.** Whenever a session is live (regular, pre,
   post or overnight, as the report's `marketStatus` says, never inferred from
   timestamps), the share price comes from Chainlink Data Streams, stamped
@@ -230,7 +229,7 @@ and `push_price` as a fallback price path, bounded the same way.
 
 ## Confidential balances
 
-Every token Agama mints (USDC, the nine xStocks, XAU, the LP token) is a Token-2022
+Every token Agama mints (USDC, the nine xStocks, GLDY, the LP token) is a Token-2022
 mint with the **confidential transfer extension**. A holder can move any of
 them into an encrypted balance and send them to anyone without the amount ever
 appearing on chain: balances and transfer amounts are ElGamal ciphertexts, and
@@ -282,9 +281,10 @@ and checked exactly.
 
 ## Devnet, said plainly
 
-- **Stand-in tokens.** USDC, the nine xStocks and XAU are mints the program
-  controls, with a public faucet: no xStock or XAUt0 faucet exists on devnet.
-  The prices are real: they track the live tokens.
+- **Stand-in tokens.** USDC, the nine xStocks and GLDY are mints the program
+  controls, with a public faucet: no xStock or GLDY faucet exists on devnet, and
+  the real GLDY is permissioned (frozen-by-default accounts behind Streamex's
+  KYC allowlist). The prices are real: they track the live tokens.
 - **Swaps settle at the oracle price minus 5 bps.** Devnet has no xStock
   liquidity. On mainnet that leg is a Jupiter route.
 - **The vault's coupons are minted.** There is no credit book on devnet, so when
@@ -294,9 +294,8 @@ and checked exactly.
 - **Token-2022 throughout**, like the mainnet xStocks.
 - Pyth's public Hermes endpoint now answers 401 without an API key, so the
   workflow reads Jupiter's price API, which returns both the token price and the
-  underlying share's price for every xStock. The gold market moved from Streamex's GLDY
-  (permissioned, one thin Orca pool) to XAUt0; the old GLDY market account
-  stays on chain, unused.
+  underlying share's price for every xStock. Orca's API answers 403 to the CRE
+  HTTP client, so GLDY is read from the whirlpool account itself.
 
 ## Run it
 
