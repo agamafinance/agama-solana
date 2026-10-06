@@ -44,4 +44,14 @@ pub enum AgamaError {
     WrongKind,
     #[msg("Too many LP shares for the pool's free cash")]
     WithdrawTooLarge,
+    #[msg("Report did not come through the configured Chainlink forwarder")]
+    InvalidForwarder,
+    #[msg("forwarder_authority is not the forwarder's PDA for this state and program")]
+    InvalidForwarderAuthority,
+    #[msg("Report comes from another workflow owner")]
+    InvalidWorkflowOwner,
+    #[msg("Report metadata or payload could not be decoded")]
+    InvalidReport,
+    #[msg("No market in the accounts for a symbol in the report")]
+    MarketNotInReport,
 }

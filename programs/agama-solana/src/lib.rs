@@ -227,27 +227,116 @@ pub mod agama_solana {
     ) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
         let m = &mut ctx.accounts.market;
-        require!(price_e8 > 0, AgamaError::ZeroAmount);
-        require!(
-            publish_time <= now + MAX_FUTURE_SKEW && publish_time >= m.price_time,
-            AgamaError::BadPublishTime
-        );
-        if m.price_e8 > 0 {
-            let old = m.price_e8 as u128;
-            let diff = (price_e8 as u128).abs_diff(old);
-            require!(
-                diff * BPS <= old * m.max_jump_bps as u128,
-                AgamaError::PriceJumpTooLarge
-            );
-        }
-        m.price_e8 = price_e8;
-        m.price_time = publish_time;
-        m.session_open = session_open;
+        m.apply_price(price_e8, publish_time, session_open, now)?;
         emit!(PricePushed {
             market: m.key(),
             price_e8,
             publish_time,
             session_open
+        });
+        Ok(())
+    }
+
+    // =====================================================================
+    //                          CHAINLINK CRE
+    // =====================================================================
+
+    /// Point the receiver at a forwarder deployment and, optionally, pin the
+    /// workflow owner.
+    pub fn set_cre(
+        ctx: Context<SetCre>,
+        forwarder_program: Pubkey,
+        forwarder_state: Pubkey,
+        workflow_owner: [u8; 20],
+        simulation: bool,
+    ) -> Result<()> {
+        let c = &mut ctx.accounts.cre;
+        c.forwarder_program = forwarder_program;
+        c.forwarder_state = forwarder_state;
+        c.workflow_owner = workflow_owner;
+        c.simulation = simulation;
+        c.bump = ctx.bumps.cre;
+        Ok(())
+    }
+
+    /// The Chainlink CRE receiver. The Keystone Forwarder calls this after
+    /// verifying the DON's signatures; the markets to price follow `cre` in the
+    /// accounts. Same bounds as the keeper: CRE replaces who brings the price,
+    /// not what a price is allowed to do.
+    pub fn on_report<'info>(
+        ctx: Context<'info, OnReport<'info>>,
+        metadata: Vec<u8>,
+        report: Vec<u8>,
+    ) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let cre = &mut ctx.accounts.cre;
+        let state = &ctx.accounts.state;
+        require_keys_eq!(
+            state.key(),
+            cre.forwarder_state,
+            AgamaError::InvalidForwarder
+        );
+        require_keys_eq!(
+            *state.owner,
+            cre.forwarder_program,
+            AgamaError::InvalidForwarder
+        );
+        let (authority, _) = Pubkey::find_program_address(
+            &[b"forwarder", state.key().as_ref(), crate::ID.as_ref()],
+            &cre.forwarder_program,
+        );
+        require_keys_eq!(
+            ctx.accounts.forwarder_authority.key(),
+            authority,
+            AgamaError::InvalidForwarderAuthority
+        );
+        // metadata = workflow_cid (32) | workflow_name (10) | workflow_owner (20) | report_id (2)
+        require!(metadata.len() >= 62, AgamaError::InvalidReport);
+        let mut owner = [0u8; 20];
+        owner.copy_from_slice(&metadata[42..62]);
+        if cre.workflow_owner != [0u8; 20] {
+            require!(
+                owner == cre.workflow_owner,
+                AgamaError::InvalidWorkflowOwner
+            );
+        }
+        let parsed =
+            PriceReport::try_from_slice(&report).map_err(|_| error!(AgamaError::InvalidReport))?;
+
+        for u in &parsed.updates {
+            let ai = ctx
+                .remaining_accounts
+                .iter()
+                .find(|ai| {
+                    ai.owner == &crate::ID
+                        && ai.is_writable
+                        && Account::<Market>::try_from(ai)
+                            .map(|m| m.symbol == u.symbol)
+                            .unwrap_or(false)
+                })
+                .ok_or(AgamaError::MarketNotInReport)?;
+            let mut m: Account<Market> = Account::try_from(ai)?;
+            let expected = Pubkey::create_program_address(
+                &[MARKET_SEED, m.stock_mint.as_ref(), &[m.bump]],
+                &crate::ID,
+            )
+            .map_err(|_| error!(AgamaError::MarketNotInReport))?;
+            require_keys_eq!(ai.key(), expected, AgamaError::MarketNotInReport);
+            m.apply_price(u.price_e8, u.publish_time, u.session_open, now)?;
+            m.exit(&crate::ID)?;
+            emit!(PricePushed {
+                market: ai.key(),
+                price_e8: u.price_e8,
+                publish_time: u.publish_time,
+                session_open: u.session_open
+            });
+        }
+        cre.reports += 1;
+        cre.last_report_at = now;
+        emit!(CreReportReceived {
+            workflow_owner: owner,
+            simulation: cre.simulation,
+            report: parsed,
         });
         Ok(())
     }
@@ -903,6 +992,28 @@ pub struct PushPrice<'info> {
 }
 
 #[derive(Accounts)]
+pub struct SetCre<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [PROTOCOL_SEED], bump = protocol.bump, has_one = admin @ AgamaError::NotAdmin)]
+    pub protocol: Box<Account<'info, Protocol>>,
+    #[account(init_if_needed, payer = admin, space = 8 + CreConfig::INIT_SPACE, seeds = [CRE_SEED], bump)]
+    pub cre: Box<Account<'info, CreConfig>>,
+    pub system_program: Program<'info, System>,
+}
+
+/// The forwarder supplies `state` and `forwarder_authority`; `cre` and the
+/// markets are the receiver accounts the workflow lists after them.
+#[derive(Accounts)]
+pub struct OnReport<'info> {
+    /// CHECK: matched against `cre.forwarder_state` and its owner in the handler.
+    pub state: UncheckedAccount<'info>,
+    pub forwarder_authority: Signer<'info>,
+    #[account(mut, seeds = [CRE_SEED], bump = cre.bump)]
+    pub cre: Box<Account<'info, CreConfig>>,
+}
+
+#[derive(Accounts)]
 pub struct FaucetUsdc<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -1206,6 +1317,13 @@ pub struct PricePushed {
     pub price_e8: u64,
     pub publish_time: i64,
     pub session_open: bool,
+}
+
+#[event]
+pub struct CreReportReceived {
+    pub workflow_owner: [u8; 20],
+    pub simulation: bool,
+    pub report: PriceReport,
 }
 
 #[event]

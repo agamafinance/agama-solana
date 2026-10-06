@@ -14,7 +14,7 @@ import { BN } from "@coral-xyz/anchor";
 import { Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { fetchToken } from "@solana-program/token-2022";
-import { RPC, ata, connection, loadKeypair, lpMint, marketAccounts, poolUsdc, positionPda, programFor, protocolPda, rails, usdcMint } from "./common";
+import { RPC, ata, connection, loadKeypair, lpMint, marketAccounts, poolUsdc, positionPda, programFor, protocolPda, rails, sweep, usdcMint } from "./common";
 import { ataOf, balances, keysFor, kitSignerFromSecret, rpc, sendPrivate, shield, toAddress, unshield, configure } from "./confidential";
 
 const conn = connection();
@@ -124,6 +124,8 @@ async function main() {
   check("bob: LP private, public zero", blp.private > 0n && blp.public === 0n, `${fmt(blp.private, 6)} LP private`);
   check("bob: 500 USDC left private", bu2.private === 500n * 10n ** 6n, `${fmt(bu2.private, 6)}`);
 
+  await sweep(conn, aliceKp, funder.publicKey);
+  await sweep(conn, bobKp, funder.publicKey);
   console.log(failures ? `\n${failures} FAILED` : "\nALL PASS");
   process.exit(failures ? 1 : 0);
 }

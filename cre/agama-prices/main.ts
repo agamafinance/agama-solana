@@ -1,0 +1,239 @@
+// agama-prices: the price layer of Agama on Solana, as a Chainlink CRE workflow.
+//
+// Every minute, each node of the DON reads the same public sources:
+//   - Jupiter's price API for the xStocks on Solana mainnet: the token's own
+//     24/7 price and the underlying share's last price
+//   - Orca's GLDY/USDC whirlpool (Streamex's gold-backed token, ~1 oz each)
+//     and the gold spot price, as a guard on a thin pool
+// The DON agrees on the median of every field, decides on its own clock whether
+// each market is in session, and writes signed reports to the Agama program's
+// `on_report` through the Keystone Forwarder, three markets per report (a
+// Solana transaction leaves the forwarder ~265 bytes once accounts are paid).
+//
+// The program applies the same bounds whoever brings a price: publish time
+// only forward, at most 15% per update, and borrowing waits on a stale one.
+import {
+	ConsensusAggregationByFields,
+	CronCapability,
+	getNetwork,
+	handler,
+	HTTPClient,
+	type HTTPSendRequester,
+	median,
+	Runner,
+	type Runtime,
+	type SolanaAccountMeta,
+	SolanaClient,
+	SolanaTxStatus,
+	solanaAccountMeta,
+} from '@chainlink/cre-sdk'
+import { getBase58Decoder } from '@solana/codecs'
+import { PublicKey } from '@solana/web3.js'
+import { z } from 'zod'
+import { AgamaSolana, type PriceUpdate } from '../contracts/solana/ts/generated'
+
+const BASE58 = getBase58Decoder()
+const enc = (s: string) => new TextEncoder().encode(s)
+
+const xstock = z.object({ symbol: z.string().max(8), kind: z.literal('xstock'), mint: z.string() })
+const gold = z.object({ symbol: z.string().max(8), kind: z.literal('gold'), orcaPool: z.string() })
+
+const configSchema = z.object({
+	schedule: z.string(),
+	jupiterUrl: z.string(),
+	orcaUrl: z.string(),
+	goldSpotUrl: z.string(),
+	/** Orca pool price is taken while within this many bps of spot. */
+	goldMaxDeviationBps: z.number(),
+	/** A share price older than this (seconds) is not "in session". */
+	shareMaxAge: z.number(),
+	marketsPerReport: z.number(),
+	solana: z.object({
+		chainSelectorName: z.string(),
+		receiverProgramId: z.string(),
+		forwarderProgramId: z.string(),
+		forwarderState: z.string(),
+	}),
+	markets: z.array(z.discriminatedUnion('kind', [xstock, gold])),
+})
+type Config = z.infer<typeof configSchema>
+
+// ---------------------------------------------------------------------------
+// Sessions, on the DON's clock (no Intl in the workflow runtime, so US DST is
+// computed by hand: second Sunday of March to first Sunday of November).
+// ---------------------------------------------------------------------------
+
+function nthSunday(year: number, month: number, n: number): number {
+	const first = new Date(Date.UTC(year, month, 1)).getUTCDay()
+	return 1 + ((7 - first) % 7) + 7 * (n - 1)
+}
+
+/** New York wall clock for a UTC instant: [weekday 0=Sun, minutes since midnight]. */
+function newYork(t: Date): [number, number] {
+	const y = t.getUTCFullYear()
+	const dstStart = Date.UTC(y, 2, nthSunday(y, 2, 2), 7) // 2am EST = 7am UTC
+	const dstEnd = Date.UTC(y, 10, nthSunday(y, 10, 1), 6) // 2am EDT = 6am UTC
+	const offset = t.getTime() >= dstStart && t.getTime() < dstEnd ? -4 : -5
+	const local = new Date(t.getTime() + offset * 3600_000)
+	return [local.getUTCDay(), local.getUTCHours() * 60 + local.getUTCMinutes()]
+}
+
+/** NYSE regular session, holidays aside. */
+export function nyseOpen(t: Date): boolean {
+	const [day, min] = newYork(t)
+	return day >= 1 && day <= 5 && min >= 9 * 60 + 30 && min < 16 * 60
+}
+
+/** Gold trades Sunday 6pm to Friday 5pm New York time. */
+export function goldOpen(t: Date): boolean {
+	const [day, min] = newYork(t)
+	if (day === 6) return false
+	if (day === 0) return min >= 18 * 60
+	if (day === 5) return min < 17 * 60
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// What each node observes. Every field is a number so the DON can take the
+// median field by field; 0 means "this node could not read it".
+// ---------------------------------------------------------------------------
+
+type Observation = Record<string, number>
+
+const get = (req: HTTPSendRequester, url: string): any => {
+	const resp = req.sendRequest({ url, method: 'GET' as const }).result()
+	if (resp.statusCode !== 200) throw new Error(`${url} returned ${resp.statusCode}`)
+	return JSON.parse(new TextDecoder().decode(resp.body))
+}
+
+const observe = (req: HTTPSendRequester, config: Config): Observation => {
+	const out: Observation = {}
+	const xs = config.markets.filter((m) => m.kind === 'xstock')
+	const golds = config.markets.filter((m) => m.kind === 'gold')
+	for (const m of config.markets) {
+		out[`${m.symbol}_a`] = 0
+		out[`${m.symbol}_b`] = 0
+		out[`${m.symbol}_t`] = 0
+	}
+	if (xs.length) {
+		const body = get(req, `${config.jupiterUrl}?ids=${xs.map((m) => m.mint).join(',')}`)
+		for (const m of xs) {
+			const q = body[m.mint]
+			if (!q) continue
+			out[`${m.symbol}_a`] = Number(q.usdPrice) || 0 // the token, 24/7
+			out[`${m.symbol}_b`] = Number(q.stockData?.price) || 0 // the share
+			out[`${m.symbol}_t`] = q.stockData?.updatedAt ? Math.floor(Date.parse(q.stockData.updatedAt) / 1000) : 0
+		}
+	}
+	if (golds.length) {
+		const spot = Number(get(req, config.goldSpotUrl).price) || 0
+		for (const m of golds) {
+			const pool = get(req, `${config.orcaUrl}/${m.orcaPool}`).data
+			// sqrtPrice is Q64.64 of tokenB per tokenA in raw units (USDC 6, GLDY 9).
+			const sqrt = Number(BigInt(pool.sqrtPrice)) / 2 ** 64
+			const rawB_per_rawA = sqrt * sqrt
+			const decA = Number(pool.tokenA?.decimals ?? 6)
+			const decB = Number(pool.tokenB?.decimals ?? 9)
+			const bPerA = rawB_per_rawA * 10 ** (decA - decB)
+			const aIsUsd = pool.tokenMintA === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+			out[`${m.symbol}_a`] = bPerA > 0 ? (aIsUsd ? 1 / bPerA : bPerA) : 0 // pool
+			out[`${m.symbol}_b`] = spot // gold spot, per ounce
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// The DON's decision, from the agreed observation.
+// ---------------------------------------------------------------------------
+
+export function decide(config: Config, obs: Observation, now: Date): { symbol: string; price: number; open: boolean; source: string }[] {
+	const nowS = Math.floor(now.getTime() / 1000)
+	const out = []
+	for (const m of config.markets) {
+		const a = obs[`${m.symbol}_a`]
+		const b = obs[`${m.symbol}_b`]
+		if (m.kind === 'xstock') {
+			const shareFresh = b > 0 && nowS - obs[`${m.symbol}_t`] < config.shareMaxAge
+			if (nyseOpen(now) && shareFresh) out.push({ symbol: m.symbol, price: b, open: true, source: 'share' })
+			else if (a > 0) out.push({ symbol: m.symbol, price: a, open: false, source: 'xStock token' })
+		} else {
+			const open = goldOpen(now)
+			const near = a > 0 && b > 0 && Math.abs(a / b - 1) * 10_000 <= config.goldMaxDeviationBps
+			if (near) out.push({ symbol: m.symbol, price: a, open, source: 'Orca pool' })
+			else if (b > 0) out.push({ symbol: m.symbol, price: b, open, source: 'gold spot' })
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+
+const pda = (seeds: Uint8Array[], program: string) => PublicKey.findProgramAddressSync(seeds, new PublicKey(program))[0]
+
+const symbolBytes = (s: string) => {
+	const b = new Uint8Array(8)
+	b.set(enc(s))
+	return b
+}
+
+const onCron = (runtime: Runtime<Config>) => {
+	const config = runtime.config
+	const sol = config.solana
+	const now = runtime.now()
+
+	const fields = Object.fromEntries(
+		config.markets.flatMap((m) => ['a', 'b', 't'].map((k) => [`${m.symbol}_${k}`, median<number>()])),
+	)
+	const obs = new HTTPClient()
+		.sendRequest(runtime, observe, ConsensusAggregationByFields<Observation>(fields as any))(config)
+		.result()
+
+	const decided = decide(config, obs, now)
+	for (const d of decided) runtime.log(`${d.symbol.padEnd(5)} ${d.price.toFixed(2)} ${d.open ? 'in session' : 'off hours'} (${d.source})`)
+
+	const network = getNetwork({ chainFamily: 'solana', chainSelectorName: sol.chainSelectorName, isTestnet: true })
+	if (!network) throw new Error(`unknown network ${sol.chainSelectorName}`)
+	const agama = new AgamaSolana(new SolanaClient(network.chainSelector.selector), sol.receiverProgramId)
+
+	const authority = pda([enc('forwarder'), new PublicKey(sol.forwarderState).toBytes(), new PublicKey(sol.receiverProgramId).toBytes()], sol.forwarderProgramId)
+	const cre = pda([enc('cre.v2')], sol.receiverProgramId)
+	const market = (symbol: string) =>
+		pda([enc('market.v2'), pda([enc('stock.v2'), symbolBytes(symbol)], sol.receiverProgramId).toBytes()], sol.receiverProgramId)
+
+	const publishTime = BigInt(Math.floor(now.getTime() / 1000))
+	const sigs: string[] = []
+	for (let i = 0; i < decided.length; i += config.marketsPerReport) {
+		const group = decided.slice(i, i + config.marketsPerReport)
+		const updates: PriceUpdate[] = group.map((d) => ({
+			symbol: Array.from(symbolBytes(d.symbol)),
+			priceE8: BigInt(Math.round(d.price * 1e8)),
+			publishTime,
+			sessionOpen: d.open,
+		}))
+		const accounts: SolanaAccountMeta[] = [
+			solanaAccountMeta(sol.forwarderState, true),
+			solanaAccountMeta(authority.toBase58()),
+			solanaAccountMeta(cre.toBase58(), true),
+			...group.map((d) => solanaAccountMeta(market(d.symbol).toBase58(), true)),
+		]
+		const resp = agama.writeReportFromPriceReport(runtime, { updates }, accounts, { computeLimit: 200_000 })
+		if (resp.txStatus !== SolanaTxStatus.SUCCESS) {
+			runtime.log(`report ${group.map((d) => d.symbol).join(',')} failed: ${resp.errorMessage || resp.txStatus}`)
+			continue
+		}
+		const sig = resp.txSignature ? BASE58.decode(resp.txSignature) : '(dry run)'
+		sigs.push(sig)
+		runtime.log(`report ${group.map((d) => d.symbol).join(',')} -> ${sig}`)
+	}
+	return { markets: decided.length, reports: sigs }
+}
+
+const initWorkflow = (config: Config) => [handler(new CronCapability().trigger({ schedule: config.schedule }), onCron)]
+
+export async function main() {
+	const runner = await Runner.newRunner<Config>({ configSchema })
+	await runner.run(initWorkflow)
+}
+
+main()

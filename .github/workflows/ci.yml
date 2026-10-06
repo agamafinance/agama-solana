@@ -21,6 +21,8 @@ jobs:
       - run: cargo fmt --check
       - name: Build the program
         run: cargo build-sbf --manifest-path programs/agama-solana/Cargo.toml
+      - name: Fetch Chainlink's CRE mock forwarder from devnet (test fixture)
+        run: ./scripts/fetch-fixtures.sh
       - name: Test (LiteSVM, against the built program)
         run: cargo test
 
@@ -56,3 +58,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
+
+  cre:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cre
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: cd contracts && bun install
+      - run: cd agama-prices && bun install && bunx tsc --noEmit

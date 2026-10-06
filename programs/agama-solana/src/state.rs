@@ -14,6 +14,7 @@ pub const STOCK_SEED: &[u8] = b"stock.v2";
 pub const MARKET_SEED: &[u8] = b"market.v2";
 pub const CUSTODY_SEED: &[u8] = b"custody.v2";
 pub const POSITION_SEED: &[u8] = b"position.v2";
+pub const CRE_SEED: &[u8] = b"cre.v2";
 pub const EARN_SEED: &[u8] = b"earn";
 pub const AMPLIFY_SEED: &[u8] = b"amplify";
 
@@ -240,5 +241,72 @@ impl Position {
         self.last_agent_at = now;
         self.last_agent_op = op;
         self.last_agent_amount = amount;
+    }
+}
+
+/// Where Chainlink CRE reports may come from. The Keystone Forwarder verifies
+/// the DON's signatures, then CPIs `on_report` signed by a PDA of
+/// `["forwarder", forwarder_state, this program]`; the receiver checks that PDA
+/// and the workflow owner in the metadata.
+#[account]
+#[derive(InitSpace)]
+pub struct CreConfig {
+    pub forwarder_program: Pubkey,
+    pub forwarder_state: Pubkey,
+    /// EVM-style address of the workflow owner, as CRE puts it in the
+    /// metadata. All zero accepts any owner.
+    pub workflow_owner: [u8; 20],
+    /// True while the forwarder is the CLI's mock: it relays without checking
+    /// signatures, so reports are only as trusted as the per-push bounds.
+    pub simulation: bool,
+    pub bump: u8,
+    pub reports: u64,
+    pub last_report_at: i64,
+}
+
+/// One price in a CRE report.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, InitSpace)]
+pub struct PriceUpdate {
+    pub symbol: [u8; 8],
+    pub price_e8: u64,
+    pub publish_time: i64,
+    pub session_open: bool,
+}
+
+/// The Borsh payload a CRE workflow writes: a few markets per report, since a
+/// Solana transaction leaves the forwarder ~265 bytes once accounts are paid.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct PriceReport {
+    pub updates: Vec<PriceUpdate>,
+}
+
+impl Market {
+    /// The one place a price is written, whoever brings it (keeper or CRE):
+    /// positive, publish time forward and not from the future, and at most
+    /// `max_jump_bps` away from the last one.
+    pub fn apply_price(
+        &mut self,
+        price_e8: u64,
+        publish_time: i64,
+        session_open: bool,
+        now: i64,
+    ) -> Result<()> {
+        require!(price_e8 > 0, AgamaError::ZeroAmount);
+        require!(
+            publish_time <= now + crate::MAX_FUTURE_SKEW && publish_time >= self.price_time,
+            AgamaError::BadPublishTime
+        );
+        if self.price_e8 > 0 {
+            let old = self.price_e8 as u128;
+            let diff = (price_e8 as u128).abs_diff(old);
+            require!(
+                diff * BPS <= old * self.max_jump_bps as u128,
+                AgamaError::PriceJumpTooLarge
+            );
+        }
+        self.price_e8 = price_e8;
+        self.price_time = publish_time;
+        self.session_open = session_open;
+        Ok(())
     }
 }

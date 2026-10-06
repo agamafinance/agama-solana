@@ -8,3 +8,4 @@ test-ledger/
 .vercel/
 *.tsbuildinfo
 .DS_Store
+programs/agama-solana/tests/fixtures/

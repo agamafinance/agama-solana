@@ -99,6 +99,20 @@ async function privateOf(keys, mint) {
 const errors = [];
 const sigs = [];
 
+/// Throwaway wallets give back what they did not spend, so a run costs fees and
+/// rent, not the funding.
+async function sweep(kp) {
+  try {
+    const bal = await conn.getBalance(kp.publicKey);
+    const keep = 0.001 * LAMPORTS_PER_SOL;
+    if (bal > keep + 5000) {
+      await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: funder.publicKey, lamports: bal - keep - 5000 })), [kp]);
+    }
+  } catch (e) {
+    console.error('sweep failed', e.message);
+  }
+}
+
 async function main() {
   await sendAndConfirmTransaction(
     conn,
@@ -197,7 +211,7 @@ async function main() {
 
   if (process.env.PRIVATE === '1') {
     const bob = Keypair.generate();
-    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: bob.publicKey, lamports: LAMPORTS_PER_SOL / 2 })), [funder]);
+    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: bob.publicKey, lamports: 0.02 * LAMPORTS_PER_SOL })), [funder]);
     const bobKeys = await recipientKeys(bob);
     await configureRecipient(bobKeys, [TSLA_MINT]);
     console.log('recipient', bob.publicKey.toBase58(), 'configured for TSLAx');
@@ -260,6 +274,7 @@ async function main() {
     console.log(pubText.replace(/\n/g, ' | '));
 
     await browser.close();
+    await sweep(bob);
     if (errors.length) throw new Error(`page errors:\n${errors.join('\n')}`);
     console.log('PASS');
     return;
@@ -317,7 +332,7 @@ async function main() {
   console.log('PASS');
 }
 
-main().catch(async (e) => {
+main().finally(() => sweep(user)).catch(async (e) => {
   console.error('FAIL', e.message ?? e);
   try {
     const text = await globalThis.__page?.evaluate(() => document.body.innerText);

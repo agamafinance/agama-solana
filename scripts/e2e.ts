@@ -22,6 +22,7 @@ import {
   protocolPda,
   rails,
   usdcMint,
+  sweep,
 } from "./common";
 
 const conn = connection();
@@ -175,6 +176,7 @@ async function main() {
   const spyBack = (await conn.getTokenAccountBalance(ata(user.publicKey, spy.stockMint))).value.uiAmount;
   console.log(`    back in the wallet: ${tslaBack} TSLA, ${spyBack} SPY`);
   if (tslaBack !== 10) throw new Error("earn close must hand back every TSLA");
+  await sweep(conn, user, admin.publicKey);
   console.log("PASS");
 }
 

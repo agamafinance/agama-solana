@@ -4,7 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import * as anchor from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 export const RPC = process.env.SOLANA_RPC ?? "https://rpc.magicblock.app/devnet";
@@ -27,15 +27,32 @@ export function symbolBytes(sym: string): number[] {
   return [...b];
 }
 
-/// The four markets, with the terms the X Layer build ships (a loop at L
-/// carries an LTV of (L - 1) / L: 1.43x on TSLA and NVDA, 1.54x on AAPL, 2x
-/// on SPY), and the mainnet xStock each one tracks.
+/// The markets. xStocks keep the X Layer terms (a loop at L carries an LTV of
+/// (L - 1) / L: 1.43x on TSLA and NVDA, 1.54x on AAPL, 2x on SPY and QQQ) and
+/// track their mainnet xStock. GLDY is Streamex's gold-backed token (about one
+/// ounce each, priced off Orca's GLDY/USDC pool): gold moves less, so it lends
+/// at 60%.
 export const MARKETS = [
-  { symbol: "TSLA", ltv: 3000, lt: 4000, xstock: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB" },
-  { symbol: "NVDA", ltv: 3000, lt: 4000, xstock: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh" },
-  { symbol: "AAPL", ltv: 3500, lt: 4500, xstock: "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp" },
-  { symbol: "SPY", ltv: 5000, lt: 6000, xstock: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W" },
+  { symbol: "TSLA", ltv: 3000, lt: 4000, kind: "xstock", xstock: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB" },
+  { symbol: "NVDA", ltv: 3000, lt: 4000, kind: "xstock", xstock: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh" },
+  { symbol: "AAPL", ltv: 3500, lt: 4500, kind: "xstock", xstock: "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp" },
+  { symbol: "SPY", ltv: 5000, lt: 6000, kind: "xstock", xstock: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W" },
+  { symbol: "QQQ", ltv: 5000, lt: 6000, kind: "xstock", xstock: "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ" },
+  { symbol: "GOOGL", ltv: 3500, lt: 4500, kind: "xstock", xstock: "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN" },
+  { symbol: "MSFT", ltv: 3500, lt: 4500, kind: "xstock", xstock: "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX" },
+  { symbol: "AMZN", ltv: 3500, lt: 4500, kind: "xstock", xstock: "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg" },
+  { symbol: "META", ltv: 3000, lt: 4000, kind: "xstock", xstock: "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu" },
+  { symbol: "GLDY", ltv: 6000, lt: 7000, kind: "gold", orcaPool: "7z9ijqqafMPUuGKGRBq8BtC6AFzXX4PfKPy2ijbGmby3" },
 ] as const;
+
+/// Chainlink CRE forwarders on devnet: the CLI's mock (what `cre workflow
+/// simulate --broadcast` relays through, no signature check) and the live
+/// Keystone Forwarder (DON signatures verified).
+export const CRE_FORWARDERS = {
+  simulation: { program: "7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK", state: "5Tipz3yhTBdVsDbaBxZkrp7Gjf3brGq5SKkxReefPMP7" },
+  production: { program: "CXsKEJcs25TQEYU2e5jZ8QTPE3ffMLZhH6BWHrdcCCB5", state: "8QoomCQyPSkJ8WopJbX9B4HyvrFzziwvJdU8hZE6DCr9" },
+} as const;
+export const crePda = pda(seed("cre.v2"));
 
 export function marketAccounts(symbol: string) {
   const stockMint = pda(seed("stock.v2"), Buffer.from(symbolBytes(symbol)));
@@ -106,14 +123,15 @@ export function nyseOpen(at = new Date()): boolean {
 export type Quote = { symbol: string; priceE8: bigint; publishTime: number; sessionOpen: boolean; source: string };
 
 export async function fetchQuotes(): Promise<Quote[]> {
-  const ids = MARKETS.map((m) => m.xstock).join(",");
+  const xs = MARKETS.filter((m) => m.kind === "xstock") as readonly { symbol: string; xstock: string }[];
+  const ids = xs.map((m) => m.xstock).join(",");
   const res = await fetch(`https://lite-api.jup.ag/price/v3?ids=${ids}`);
   if (!res.ok) throw new Error(`jupiter price ${res.status}`);
   const body = (await res.json()) as Record<string, any>;
   const open = nyseOpen();
   const now = Math.floor(Date.now() / 1000);
   const out: Quote[] = [];
-  for (const m of MARKETS) {
+  for (const m of xs) {
     const q = body[m.xstock];
     if (!q) continue;
     const share = q.stockData?.price as number | undefined;
@@ -128,6 +146,22 @@ export async function fetchQuotes(): Promise<Quote[]> {
       sessionOpen: !!useShare,
       source: useShare ? "share (NYSE session)" : "xStock token on Solana",
     });
+  }
+  // GLDY: Orca's GLDY/USDC whirlpool, guarded by the gold spot price.
+  for (const m of MARKETS.filter((m) => m.kind === "gold") as readonly { symbol: string; orcaPool: string }[]) {
+    try {
+      const pool = (await (await fetch(`https://api.orca.so/v2/solana/pools/${m.orcaPool}`)).json()).data;
+      const spot = Number((await (await fetch("https://api.gold-api.com/price/XAU")).json()).price) || 0;
+      const sqrt = Number(BigInt(pool.sqrtPrice)) / 2 ** 64;
+      const usdcPerGldy = 1 / (sqrt * sqrt * 10 ** (6 - 9));
+      const usePool = spot > 0 && Math.abs(usdcPerGldy / spot - 1) < 0.03;
+      const price = usePool ? usdcPerGldy : spot;
+      if (!(price > 0)) continue;
+      const ny = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+      const d = ny.getDay(), min = ny.getHours() * 60 + ny.getMinutes();
+      const goldOpen = d === 6 ? false : d === 0 ? min >= 18 * 60 : d === 5 ? min < 17 * 60 : true;
+      out.push({ symbol: m.symbol, priceE8: BigInt(Math.round(price * 1e8)), publishTime: now, sessionOpen: goldOpen, source: usePool ? "Orca GLDY pool" : "gold spot" });
+    } catch {}
   }
   return out;
 }
@@ -158,4 +192,13 @@ export async function sendReliably(
     }
   }
   throw new Error("not confirmed after three blockhashes");
+}
+
+/// Give a throwaway test wallet's unspent SOL back, so a test run costs fees
+/// and rent rather than its funding.
+export async function sweep(conn: Connection, from: Keypair, to: PublicKey): Promise<void> {
+  const bal = await conn.getBalance(from.publicKey);
+  const keep = 1_000_000;
+  if (bal <= keep + 5000) return;
+  await sendReliably(conn, [SystemProgram.transfer({ fromPubkey: from.publicKey, toPubkey: to, lamports: bal - keep - 5000 })], [from]).catch(() => {});
 }

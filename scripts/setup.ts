@@ -9,7 +9,9 @@ import { BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
+  CRE_FORWARDERS,
   MARKETS,
+  crePda,
   ata,
   connection,
   fetchQuotes,
@@ -160,6 +162,21 @@ async function main() {
       .rpc();
     console.log(`seeded pool with ${SEED_POOL_USDC} USDC`, sig);
   }
+  // Chainlink CRE: point the receiver at the forwarder. CRE_MODE=production
+  // switches to the live Keystone Forwarder once the workflow runs on the DON;
+  // CRE_WORKFLOW_OWNER (0x...) pins the workflow owner.
+  const mode = (process.env.CRE_MODE ?? "simulation") as keyof typeof CRE_FORWARDERS;
+  const fwd = CRE_FORWARDERS[mode];
+  const ownerHex = (process.env.CRE_WORKFLOW_OWNER ?? "").replace(/^0x/, "");
+  const owner = ownerHex ? [...Buffer.from(ownerHex.padStart(40, "0"), "hex")] : new Array(20).fill(0);
+  const cur: any = await (program.account as any).creConfig.fetchNullable(crePda);
+  if (!cur || cur.forwarderProgram.toBase58() !== fwd.program || Buffer.from(cur.workflowOwner).toString("hex") !== Buffer.from(owner).toString("hex")) {
+    const sig = await program.methods
+      .setCre(new PublicKey(fwd.program), new PublicKey(fwd.state), owner, mode === "simulation")
+      .accountsPartial({ admin: admin.publicKey, protocol: protocolPda, cre: crePda, systemProgram: SystemProgram.programId })
+      .rpc();
+    console.log(`cre: ${mode} forwarder, owner ${ownerHex || "any"}`, sig);
+  } else console.log("cre configured");
   console.log("done");
 }
 

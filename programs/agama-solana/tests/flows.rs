@@ -959,3 +959,249 @@ fn close_never_needs_public_usdc_for_rounding() {
     assert_eq!(w.balance(&alice.pubkey(), &tsla.stock_mint), 10 * SHARE);
     assert_eq!(w.protocol().total_scaled_debt, 0);
 }
+
+// ---------------------------------------------------------------------------
+// Chainlink CRE: reports relayed by Chainlink's own mock forwarder program
+// (the one `cre workflow simulate` uses), loaded from tests/fixtures.
+// ---------------------------------------------------------------------------
+
+const MOCK_FORWARDER: Pubkey = anchor_lang::pubkey!("7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK");
+
+fn sha256(b: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(b).into()
+}
+
+fn disc(name: &str) -> [u8; 8] {
+    sha256(format!("global:{name}").as_bytes())[..8]
+        .try_into()
+        .unwrap()
+}
+
+fn sym(s: &str) -> [u8; 8] {
+    let mut b = [0u8; 8];
+    b[..s.len()].copy_from_slice(s.as_bytes());
+    b
+}
+
+struct Cre {
+    state: Pubkey,
+    authority: Pubkey,
+    cre: Pubkey,
+}
+
+fn setup_cre(w: &mut World, owner: [u8; 20]) -> Cre {
+    w.svm
+        .add_program_from_file(MOCK_FORWARDER, "tests/fixtures/mock_forwarder.so")
+        .expect("run scripts/fetch-fixtures.sh first");
+    let state = Keypair::new();
+    let admin = w.admin.insecure_clone();
+    let init = Instruction {
+        program_id: MOCK_FORWARDER,
+        accounts: vec![
+            anchor_lang::solana_program::instruction::AccountMeta::new(state.pubkey(), true),
+            anchor_lang::solana_program::instruction::AccountMeta::new(admin.pubkey(), true),
+            anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                anchor_lang::system_program::ID,
+                false,
+            ),
+        ],
+        data: disc("initialize").to_vec(),
+    };
+    let tx = Transaction::new_signed_with_payer(
+        &[init],
+        Some(&admin.pubkey()),
+        &[&admin, &state],
+        w.svm.latest_blockhash(),
+    );
+    w.svm.send_transaction(tx).unwrap();
+    w.svm.expire_blockhash();
+    let cre = pda(&[CRE_SEED]);
+    let ix = Instruction {
+        program_id: agama_solana::ID,
+        accounts: accounts::SetCre {
+            admin: admin.pubkey(),
+            protocol: w.protocol,
+            cre,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None),
+        data: instruction::SetCre {
+            forwarder_program: MOCK_FORWARDER,
+            forwarder_state: state.pubkey(),
+            workflow_owner: owner,
+            simulation: true,
+        }
+        .data(),
+    };
+    w.send(&[ix], &admin).unwrap();
+    let (authority, _) = Pubkey::find_program_address(
+        &[
+            b"forwarder",
+            state.pubkey().as_ref(),
+            agama_solana::ID.as_ref(),
+        ],
+        &MOCK_FORWARDER,
+    );
+    Cre {
+        state: state.pubkey(),
+        authority,
+        cre,
+    }
+}
+
+/// What the DON would sign, relayed through the mock forwarder's `report`.
+fn cre_report_ix(
+    c: &Cre,
+    transmitter: &Pubkey,
+    owner: [u8; 20],
+    markets: &[Pubkey],
+    updates: Vec<PriceUpdate>,
+) -> Instruction {
+    let payload = anchor_lang::prelude::borsh::to_vec(&PriceReport { updates }).unwrap();
+    let mut keys = vec![c.state, c.authority, c.cre];
+    keys.extend_from_slice(markets);
+    let flat: Vec<u8> = keys.iter().flat_map(|k| k.to_bytes()).collect();
+    let account_hash = sha256(&flat);
+    let mut raw = vec![1u8; 45]; // forwarder metadata: version, execution id, ...
+    raw.extend_from_slice(&[7u8; 32]); // workflow_cid
+    raw.extend_from_slice(b"agamaprice"); // workflow_name (10)
+    raw.extend_from_slice(&owner); // workflow_owner (20)
+    raw.extend_from_slice(&[0, 1]); // report_id
+    raw.extend_from_slice(&account_hash);
+    raw.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    raw.extend_from_slice(&payload);
+    let mut data = vec![0u8]; // no signatures: the mock does not check them
+    data.extend_from_slice(&raw);
+    data.extend_from_slice(&[0u8; 96]); // report context
+    let mut ix_data = disc("report").to_vec();
+    ix_data.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    ix_data.extend_from_slice(&data);
+    use anchor_lang::solana_program::instruction::AccountMeta;
+    let mut metas = vec![
+        AccountMeta::new_readonly(c.state, false),
+        AccountMeta::new(*transmitter, true),
+        AccountMeta::new_readonly(c.authority, false),
+        AccountMeta::new_readonly(agama_solana::ID, false),
+        AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+        AccountMeta::new(c.cre, false),
+    ];
+    metas.extend(markets.iter().map(|m| AccountMeta::new(*m, false)));
+    Instruction {
+        program_id: MOCK_FORWARDER,
+        accounts: metas,
+        data: ix_data,
+    }
+}
+
+const OWNER: [u8; 20] = [0xab; 20];
+
+#[test]
+fn cre_reports_price_the_markets() {
+    let mut w = World::new();
+    let tsla = w.add_market("TSLA", 3_000, 4_000, 400 * PX);
+    let gldy = w.add_market("GLDY", 6_000, 7_000, 4_150 * PX);
+    let c = setup_cre(&mut w, OWNER);
+    let relayer = w.user();
+    w.warp(30);
+    let now = w.now();
+    let ix = cre_report_ix(
+        &c,
+        &relayer.pubkey(),
+        OWNER,
+        &[tsla.market, gldy.market],
+        vec![
+            PriceUpdate {
+                symbol: sym("TSLA"),
+                price_e8: 410 * PX,
+                publish_time: now,
+                session_open: false,
+            },
+            PriceUpdate {
+                symbol: sym("GLDY"),
+                price_e8: 4_160 * PX,
+                publish_time: now,
+                session_open: true,
+            },
+        ],
+    );
+    w.send(&[ix], &relayer).unwrap();
+    let t = w.market(&tsla);
+    assert_eq!(
+        (t.price_e8, t.price_time, t.session_open),
+        (410 * PX, now, false)
+    );
+    assert_eq!(w.market(&gldy).price_e8, 4_160 * PX);
+    let cfg: CreConfig = w.load(&c.cre);
+    assert_eq!(cfg.reports, 1);
+
+    // The same bounds as the keeper: a 20% jump in one report is refused.
+    w.warp(30);
+    let now = w.now();
+    let ix = cre_report_ix(
+        &c,
+        &relayer.pubkey(),
+        OWNER,
+        &[tsla.market],
+        vec![PriceUpdate {
+            symbol: sym("TSLA"),
+            price_e8: 492 * PX,
+            publish_time: now,
+            session_open: true,
+        }],
+    );
+    err_has(w.send(&[ix], &relayer), "PriceJumpTooLarge");
+}
+
+#[test]
+fn cre_refuses_what_did_not_come_from_our_workflow() {
+    let mut w = World::new();
+    let tsla = w.add_market("TSLA", 3_000, 4_000, 400 * PX);
+    let c = setup_cre(&mut w, OWNER);
+    let eve = w.user();
+    let now = w.now();
+    let upd = || {
+        vec![PriceUpdate {
+            symbol: sym("TSLA"),
+            price_e8: 401 * PX,
+            publish_time: now,
+            session_open: true,
+        }]
+    };
+
+    // Another workflow owner, through the right forwarder.
+    let ix = cre_report_ix(&c, &eve.pubkey(), [0xcd; 20], &[tsla.market], upd());
+    err_has(w.send(&[ix], &eve), "InvalidWorkflowOwner");
+
+    // Calling on_report directly, signing as forwarder_authority with a plain key.
+    let fake = Keypair::new();
+    w.svm.airdrop(&fake.pubkey(), 1_000_000_000).unwrap();
+    let mut metadata = vec![0u8; 64];
+    metadata[42..62].copy_from_slice(&OWNER);
+    let mut accs = accounts::OnReport {
+        state: c.state,
+        forwarder_authority: fake.pubkey(),
+        cre: c.cre,
+    }
+    .to_account_metas(None);
+    accs.push(anchor_lang::solana_program::instruction::AccountMeta::new(
+        tsla.market,
+        false,
+    ));
+    let ix = Instruction {
+        program_id: agama_solana::ID,
+        accounts: accs,
+        data: instruction::OnReport {
+            metadata,
+            report: anchor_lang::prelude::borsh::to_vec(&PriceReport { updates: upd() }).unwrap(),
+        }
+        .data(),
+    };
+    err_has(w.send(&[ix], &fake), "InvalidForwarderAuthority");
+
+    // A report naming a market it did not pass.
+    let ix = cre_report_ix(&c, &eve.pubkey(), OWNER, &[], upd());
+    err_has(w.send(&[ix], &eve), "MarketNotInReport");
+
+    assert_eq!(w.market(&tsla).price_e8, 400 * PX);
+}

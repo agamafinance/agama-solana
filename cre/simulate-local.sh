@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# The CRE workflow end to end on a throwaway validator: Agama's program, devnet's
+# Token-2022, and Chainlink's mock forwarder (program + state) cloned in. Then
+# `cre workflow simulate --broadcast` writes real reports through the forwarder
+# into `on_report`, and the market prices are read back.
+#   VALIDATOR=/path/to/agave-4.3/bin/solana-test-validator ./cre/simulate-local.sh
+set -eo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+: "${VALIDATOR:?set VALIDATOR to an agave 4.3+ solana-test-validator}"
+L=$(mktemp -d)
+ADMIN=$L/admin.json
+TX=$L/transmitter.json
+solana-keygen new --no-bip39-passphrase -s -o "$ADMIN" >/dev/null
+solana-keygen new --no-bip39-passphrase -s -o "$TX" >/dev/null
+CLONE=${CLONE_URL:-https://rpc.magicblock.app/devnet}
+"$VALIDATOR" --reset --quiet --ledger "$L/ledger" --url "$CLONE" \
+  --clone-upgradeable-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb \
+  --clone-upgradeable-program 7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK \
+  --clone 5Tipz3yhTBdVsDbaBxZkrp7Gjf3brGq5SKkxReefPMP7 \
+  --bpf-program 6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D target/deploy/agama_solana.so &
+V=$!
+trap 'kill $V 2>/dev/null; rm -rf "$L"' EXIT
+export SOLANA_RPC=http://127.0.0.1:8899
+until solana -u $SOLANA_RPC cluster-version >/dev/null 2>&1; do sleep 1; done
+solana -u $SOLANA_RPC airdrop 100 "$(solana-keygen pubkey "$ADMIN")" >/dev/null
+solana -u $SOLANA_RPC airdrop 10 "$(solana-keygen pubkey "$TX")" >/dev/null
+echo "== setup"
+ANCHOR_WALLET=$ADMIN ./node_modules/.bin/tsx scripts/setup.ts 2>&1 | grep -v "punycode\|trace-deprecation\|bigint" | grep -E "add_market|cre|done|Error" | head -20
+echo "== cre workflow simulate --broadcast"
+cd cre
+cat > .env <<ENV
+CRE_SOLANA_PRIVATE_KEY=$(node -e "const bs58=require('$ROOT/node_modules/.pnpm/bs58@4.0.1/node_modules/bs58');console.log(bs58.default?bs58.default.encode(Buffer.from(require('$TX'))):bs58.encode(Buffer.from(require('$TX'))))")
+CRE_ETH_PRIVATE_KEY=0000000000000000000000000000000000000000000000000000000000000001
+ENV
+cat > project.local.yaml <<YAML
+local-settings:
+  rpcs:
+    - chain-name: solana-devnet
+      url: http://127.0.0.1:8899
+YAML
+cp project.yaml project.yaml.bak && cat project.local.yaml >> project.yaml
+cp agama-prices/workflow.yaml agama-prices/workflow.yaml.bak
+cat >> agama-prices/workflow.yaml <<YAML
+
+local-settings:
+  user-workflow:
+    workflow-name: "agama-prices"
+    deployment-registry: "private"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.simulation.json"
+    secrets-path: ""
+YAML
+restore() { mv project.yaml.bak project.yaml; mv agama-prices/workflow.yaml.bak agama-prices/workflow.yaml; rm -f project.local.yaml; }
+trap 'restore; kill $V 2>/dev/null; rm -rf "$L"' EXIT
+cre workflow simulate agama-prices --target local-settings --broadcast --non-interactive --trigger-index 0 2>&1 | grep -v "^\s*$" | tail -40
+cd "$ROOT"
+echo "== on chain"
+./node_modules/.bin/tsx scripts/state.ts 2>&1 | grep -E "^[A-Z]{3,5} " || true

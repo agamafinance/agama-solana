@@ -1,0 +1,19 @@
+{
+  "name": "agama-prices",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@chainlink/cre-sdk": "1.23.0",
+    "@solana/addresses": "6.10.0",
+    "@solana/codecs": "6.10.0",
+    "@solana/web3.js": "1.98.4",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

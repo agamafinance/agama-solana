@@ -1,0 +1,12 @@
+# CRE project settings. `simulation-settings` relays through Chainlink's mock
+# forwarder on devnet (`cre workflow simulate --broadcast`); `production-settings`
+# is the DON, through the live Keystone Forwarder on devnet.
+simulation-settings:
+  rpcs:
+    - chain-name: solana-devnet
+      url: https://rpc.magicblock.app/devnet
+
+production-settings:
+  rpcs:
+    - chain-name: solana-devnet
+      url: https://rpc.magicblock.app/devnet
