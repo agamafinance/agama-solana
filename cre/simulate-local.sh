@@ -7,6 +7,10 @@
 set -eo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
+if lsof -nP -iTCP:8899 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "port 8899 is taken: another local validator is running (pkill -f solana-test-validator)" >&2
+  exit 1
+fi
 : "${VALIDATOR:?set VALIDATOR to an agave 4.3+ solana-test-validator}"
 L=$(mktemp -d)
 ADMIN=$L/admin.json
@@ -39,9 +43,9 @@ local-settings:
     - chain-name: solana-devnet
       url: http://127.0.0.1:8899
 YAML
-cp project.yaml project.yaml.bak && cat project.local.yaml >> project.yaml
+cp project.yaml project.yaml.bak && grep -q "^local-settings:" project.yaml || cat project.local.yaml >> project.yaml
 cp agama-prices/workflow.yaml agama-prices/workflow.yaml.bak
-cat >> agama-prices/workflow.yaml <<YAML
+grep -q "^local-settings:" agama-prices/workflow.yaml || cat >> agama-prices/workflow.yaml <<YAML
 
 local-settings:
   user-workflow:
@@ -52,7 +56,7 @@ local-settings:
     config-path: "./config.simulation.json"
     secrets-path: ""
 YAML
-restore() { mv project.yaml.bak project.yaml; mv agama-prices/workflow.yaml.bak agama-prices/workflow.yaml; rm -f project.local.yaml; }
+restore() { C="$ROOT/cre"; mv "$C/project.yaml.bak" "$C/project.yaml"; mv "$C/agama-prices/workflow.yaml.bak" "$C/agama-prices/workflow.yaml"; rm -f "$C/project.local.yaml"; }
 trap 'restore; kill $V 2>/dev/null; rm -rf "$L"' EXIT
 cre workflow simulate agama-prices --target local-settings --broadcast --non-interactive --trigger-index 0 2>&1 | grep -v "^\s*$" | tail -40
 cd "$ROOT"

@@ -8,6 +8,10 @@
 #   VALIDATOR=/path/to/agave-4.3/bin/solana-test-validator ./scripts/e2e-local.sh
 set -eo pipefail
 cd "$(dirname "$0")/.."
+if lsof -nP -iTCP:8899 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "port 8899 is taken: another local validator is running (pkill -f solana-test-validator)" >&2
+  exit 1
+fi
 
 LEDGER=$(mktemp -d)
 ADMIN="$LEDGER/admin.json"

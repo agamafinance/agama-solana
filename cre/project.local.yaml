@@ -1,4 +1,0 @@
-local-settings:
-  rpcs:
-    - chain-name: solana-devnet
-      url: http://127.0.0.1:8899
