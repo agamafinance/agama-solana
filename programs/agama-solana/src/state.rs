@@ -3,15 +3,17 @@ use anchor_lang::prelude::*;
 use crate::errors::AgamaError;
 use crate::math::*;
 
-pub const PROTOCOL_SEED: &[u8] = b"protocol";
-pub const USDC_SEED: &[u8] = b"usdc";
-pub const LP_SEED: &[u8] = b"lp";
-pub const POOL_USDC_SEED: &[u8] = b"pool_usdc";
-pub const VAULT_USDC_SEED: &[u8] = b"vault_usdc";
-pub const STOCK_SEED: &[u8] = b"stock";
-pub const MARKET_SEED: &[u8] = b"market";
-pub const CUSTODY_SEED: &[u8] = b"custody";
-pub const POSITION_SEED: &[u8] = b"position";
+/// `.v2`: the Token-2022 deployment. The v1 accounts (classic SPL mints) are
+/// left where they are on devnet.
+pub const PROTOCOL_SEED: &[u8] = b"protocol.v2";
+pub const USDC_SEED: &[u8] = b"usdc.v2";
+pub const LP_SEED: &[u8] = b"lp.v2";
+pub const POOL_USDC_SEED: &[u8] = b"pool_usdc.v2";
+pub const VAULT_USDC_SEED: &[u8] = b"vault_usdc.v2";
+pub const STOCK_SEED: &[u8] = b"stock.v2";
+pub const MARKET_SEED: &[u8] = b"market.v2";
+pub const CUSTODY_SEED: &[u8] = b"custody.v2";
+pub const POSITION_SEED: &[u8] = b"position.v2";
 pub const EARN_SEED: &[u8] = b"earn";
 pub const AMPLIFY_SEED: &[u8] = b"amplify";
 

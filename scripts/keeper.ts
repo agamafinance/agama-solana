@@ -12,7 +12,7 @@
 //   --agents-only          skip the price half (anyone can run this)
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, Transaction } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { MARKETS, connection, fetchQuotes, keeperKeypair, marketAccounts, programFor, rails } from "./common";
 
 const TICK_MS = Number(process.env.TICK_MS ?? 30_000);
@@ -72,7 +72,7 @@ async function runAgents() {
           caller: keeper.publicKey,
           position: publicKey,
           ...rails(symbol),
-          tokenProgram: TOKEN_PROGRAM_ID,
+          tokenProgram: TOKEN_2022_PROGRAM_ID,
         })
         .instruction();
       const tx = new Transaction().add(built);

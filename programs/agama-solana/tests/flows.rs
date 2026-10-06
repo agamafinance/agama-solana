@@ -4,8 +4,8 @@
 use anchor_lang::prelude::{Clock, Pubkey};
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::{AccountDeserialize, InstructionData, ToAccountMetas};
-use anchor_spl::associated_token::{self, get_associated_token_address};
-use anchor_spl::token::{Mint, TokenAccount};
+use anchor_spl::associated_token::{self, get_associated_token_address_with_program_id};
+use anchor_spl::token_interface::{Mint, TokenAccount};
 use litesvm::LiteSVM;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
@@ -18,6 +18,11 @@ const USDC: u64 = 1_000_000;
 const SHARE: u64 = 100_000_000;
 const PX: u64 = 100_000_000; // 1 USD in price_e8
 const DAY: i64 = 86_400;
+
+/// The Token-2022 associated account.
+fn ata(owner: &Pubkey, mint: &Pubkey) -> Pubkey {
+    get_associated_token_address_with_program_id(owner, mint, &anchor_spl::token_2022::ID)
+}
 
 fn pda(seeds: &[&[u8]]) -> Pubkey {
     Pubkey::find_program_address(seeds, &agama_solana::ID).0
@@ -69,7 +74,7 @@ impl World {
                 lp_mint: w.lp_mint,
                 pool_usdc: w.pool_usdc,
                 vault_usdc: w.vault_usdc,
-                token_program: anchor_spl::token::ID,
+                token_program: anchor_spl::token_2022::ID,
                 system_program: anchor_lang::system_program::ID,
             }
             .to_account_metas(None),
@@ -147,7 +152,7 @@ impl World {
                 stock_mint,
                 market,
                 custody,
-                token_program: anchor_spl::token::ID,
+                token_program: anchor_spl::token_2022::ID,
                 system_program: anchor_lang::system_program::ID,
             }
             .to_account_metas(None),
@@ -227,8 +232,8 @@ impl World {
                     user: user.pubkey(),
                     protocol: self.protocol,
                     usdc_mint: self.usdc_mint,
-                    user_usdc: get_associated_token_address(&user.pubkey(), &self.usdc_mint),
-                    token_program: anchor_spl::token::ID,
+                    user_usdc: ata(&user.pubkey(), &self.usdc_mint),
+                    token_program: anchor_spl::token_2022::ID,
                     associated_token_program: associated_token::ID,
                     system_program: anchor_lang::system_program::ID,
                 }
@@ -242,8 +247,8 @@ impl World {
                     protocol: self.protocol,
                     market: m.market,
                     stock_mint: m.stock_mint,
-                    user_stock: get_associated_token_address(&user.pubkey(), &m.stock_mint),
-                    token_program: anchor_spl::token::ID,
+                    user_stock: ata(&user.pubkey(), &m.stock_mint),
+                    token_program: anchor_spl::token_2022::ID,
                     associated_token_program: associated_token::ID,
                     system_program: anchor_lang::system_program::ID,
                 }
@@ -263,9 +268,9 @@ impl World {
                 usdc_mint: self.usdc_mint,
                 lp_mint: self.lp_mint,
                 pool_usdc: self.pool_usdc,
-                user_usdc: get_associated_token_address(&user.pubkey(), &self.usdc_mint),
-                user_lp: get_associated_token_address(&user.pubkey(), &self.lp_mint),
-                token_program: anchor_spl::token::ID,
+                user_usdc: ata(&user.pubkey(), &self.usdc_mint),
+                user_lp: ata(&user.pubkey(), &self.lp_mint),
+                token_program: anchor_spl::token_2022::ID,
                 associated_token_program: associated_token::ID,
                 system_program: anchor_lang::system_program::ID,
             }
@@ -314,8 +319,8 @@ impl World {
                 pool_usdc: self.pool_usdc,
                 vault_usdc: self.vault_usdc,
                 custody: m.custody,
-                user_stock: get_associated_token_address(&user.pubkey(), &m.stock_mint),
-                token_program: anchor_spl::token::ID,
+                user_stock: ata(&user.pubkey(), &m.stock_mint),
+                token_program: anchor_spl::token_2022::ID,
                 system_program: anchor_lang::system_program::ID,
             }
             .to_account_metas(None),
@@ -341,9 +346,9 @@ impl World {
                 pool_usdc: self.pool_usdc,
                 vault_usdc: self.vault_usdc,
                 custody: m.custody,
-                user_usdc: get_associated_token_address(&user.pubkey(), &self.usdc_mint),
-                user_stock: get_associated_token_address(&user.pubkey(), &m.stock_mint),
-                token_program: anchor_spl::token::ID,
+                user_usdc: ata(&user.pubkey(), &self.usdc_mint),
+                user_stock: ata(&user.pubkey(), &m.stock_mint),
+                token_program: anchor_spl::token_2022::ID,
                 associated_token_program: associated_token::ID,
                 system_program: anchor_lang::system_program::ID,
             }
@@ -366,7 +371,7 @@ impl World {
                 pool_usdc: self.pool_usdc,
                 vault_usdc: self.vault_usdc,
                 custody: m.custody,
-                token_program: anchor_spl::token::ID,
+                token_program: anchor_spl::token_2022::ID,
             }
             .to_account_metas(None),
             data: instruction::EarnSetTarget {
@@ -396,8 +401,8 @@ impl World {
                 pool_usdc: self.pool_usdc,
                 vault_usdc: self.vault_usdc,
                 custody: m.custody,
-                user_stock: get_associated_token_address(&user.pubkey(), &m.stock_mint),
-                token_program: anchor_spl::token::ID,
+                user_stock: ata(&user.pubkey(), &m.stock_mint),
+                token_program: anchor_spl::token_2022::ID,
                 system_program: anchor_lang::system_program::ID,
             }
             .to_account_metas(None),
@@ -423,8 +428,8 @@ impl World {
                 pool_usdc: self.pool_usdc,
                 vault_usdc: self.vault_usdc,
                 custody: m.custody,
-                user_stock: get_associated_token_address(&user.pubkey(), &m.stock_mint),
-                token_program: anchor_spl::token::ID,
+                user_stock: ata(&user.pubkey(), &m.stock_mint),
+                token_program: anchor_spl::token_2022::ID,
                 associated_token_program: associated_token::ID,
                 system_program: anchor_lang::system_program::ID,
             }
@@ -447,7 +452,7 @@ impl World {
                 pool_usdc: self.pool_usdc,
                 vault_usdc: self.vault_usdc,
                 custody: m.custody,
-                token_program: anchor_spl::token::ID,
+                token_program: anchor_spl::token_2022::ID,
             }
             .to_account_metas(None),
             data,
@@ -483,9 +488,9 @@ impl World {
                 pool_usdc: self.pool_usdc,
                 vault_usdc: self.vault_usdc,
                 custody: m.custody,
-                liquidator_usdc: get_associated_token_address(&liq.pubkey(), &self.usdc_mint),
-                liquidator_stock: get_associated_token_address(&liq.pubkey(), &m.stock_mint),
-                token_program: anchor_spl::token::ID,
+                liquidator_usdc: ata(&liq.pubkey(), &self.usdc_mint),
+                liquidator_stock: ata(&liq.pubkey(), &m.stock_mint),
+                token_program: anchor_spl::token_2022::ID,
                 associated_token_program: associated_token::ID,
                 system_program: anchor_lang::system_program::ID,
             }
@@ -529,7 +534,7 @@ impl World {
             .unwrap_or(false)
     }
     fn balance(&self, owner: &Pubkey, mint: &Pubkey) -> u64 {
-        let ata = get_associated_token_address(owner, mint);
+        let ata = ata(owner, mint);
         match self.svm.get_account(&ata) {
             Some(a) if !a.data.is_empty() => {
                 TokenAccount::try_deserialize(&mut &a.data[..])
@@ -872,5 +877,85 @@ fn the_slider_moves_the_position_now() {
     // A stranger cannot move it (the PDA is derived from the signer).
     let eve = w.user();
     assert!(w.set_target(&eve, &tsla, 2_000).is_err());
-    let _ = Mint::LEN;
+}
+
+#[test]
+fn every_mint_is_confidential() {
+    use spl_token_2022_interface::extension::confidential_transfer::ConfidentialTransferMint;
+    use spl_token_2022_interface::extension::{BaseStateWithExtensions, StateWithExtensions};
+    use spl_token_2022_interface::state::Mint as SplMint;
+
+    let mut w = World::new();
+    let tsla = w.add_market("TSLA", 3_000, 4_000, 400 * PX);
+    for mint in [w.usdc_mint, w.lp_mint, tsla.stock_mint] {
+        let acc = w.svm.get_account(&mint).unwrap();
+        assert_eq!(acc.owner, anchor_spl::token_2022::ID);
+        let state = StateWithExtensions::<SplMint>::unpack(&acc.data).unwrap();
+        let ct = state.get_extension::<ConfidentialTransferMint>().unwrap();
+        assert!(bool::from(ct.auto_approve_new_accounts));
+        // No authority can change it, no auditor can read the balances.
+        assert_eq!(Option::<Pubkey>::from(ct.authority), None);
+        assert_eq!(ct.auditor_elgamal_pubkey, Default::default());
+        assert_eq!(state.base.mint_authority, Some(w.protocol).into());
+    }
+    let _ = Mint::try_deserialize(&mut &w.svm.get_account(&w.usdc_mint).unwrap().data[..]).unwrap();
+}
+
+#[test]
+fn close_never_needs_public_usdc_for_rounding() {
+    // A holder whose USDC is all in a confidential balance has zero public
+    // USDC. Closing right after opening leaves a few units of rounding
+    // between the vault shares and the debt: that must not reach the wallet.
+    let mut w = World::new();
+    let tsla = w.add_market("TSLA", 3_000, 4_000, 400 * PX);
+    w.seed_pool(&tsla, 10);
+    let alice = w.user();
+    w.faucet(&alice, &tsla);
+    // Take the faucet USDC out of the public balance, as a shield would.
+    let usdc = w.usdc_mint;
+    let burn = Instruction {
+        program_id: anchor_spl::token_2022::ID,
+        accounts: vec![
+            anchor_lang::solana_program::instruction::AccountMeta::new(
+                ata(&alice.pubkey(), &usdc),
+                false,
+            ),
+            anchor_lang::solana_program::instruction::AccountMeta::new(usdc, false),
+            anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                alice.pubkey(),
+                true,
+            ),
+        ],
+        data: {
+            let mut d = vec![8u8]; // Burn
+            d.extend_from_slice(&(10_000 * USDC).to_le_bytes());
+            d
+        },
+    };
+    w.send(&[burn], &alice).unwrap();
+    assert_eq!(w.balance(&alice.pubkey(), &w.usdc_mint), 0);
+
+    // A month in, the borrow index and the vault NAV are no longer round
+    // numbers. Then open and close in the same slot, so no yield has accrued
+    // to cover the rounding: the vault value rounds down, the debt rounds up.
+    w.warp(30 * DAY);
+    let now = w.now();
+    w.push(&tsla, 400 * PX, now, true).unwrap();
+    w.poke();
+    for (amount, target) in [
+        (3 * SHARE + 7, 2_337u16),
+        (SHARE / 3, 1_111),
+        (7 * SHARE + 1, 2_999),
+    ] {
+        w.earn_deposit(&alice, &tsla, amount, target).unwrap();
+        let pos = w.position_pda(&alice.pubkey(), &tsla, EARN_SEED);
+        let (p, s) = (w.protocol(), w.position(&pos));
+        assert!(
+            s.debt(&p).unwrap() > p.shares_value(s.shares).unwrap(),
+            "no rounding gap to cover"
+        );
+        w.earn_close(&alice, &tsla).unwrap();
+    }
+    assert_eq!(w.balance(&alice.pubkey(), &tsla.stock_mint), 10 * SHARE);
+    assert_eq!(w.protocol().total_scaled_debt, 0);
 }

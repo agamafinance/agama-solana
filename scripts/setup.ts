@@ -7,7 +7,7 @@
 //   4. supply       seed the pool with faucet USDC so there is something to borrow
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_2022_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
   MARKETS,
   ata,
@@ -55,7 +55,7 @@ async function main() {
         lpMint,
         poolUsdc,
         vaultUsdc,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -83,7 +83,7 @@ async function main() {
         stockMint: acc.stockMint,
         market: acc.market,
         custody: acc.custody,
-        tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -134,7 +134,7 @@ async function main() {
               protocol: protocolPda,
               usdcMint,
               userUsdc: ata(admin.publicKey, usdcMint),
-              tokenProgram: TOKEN_PROGRAM_ID,
+              tokenProgram: TOKEN_2022_PROGRAM_ID,
               associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
             })
@@ -153,7 +153,7 @@ async function main() {
         poolUsdc,
         userUsdc: ata(admin.publicKey, usdcMint),
         userLp: ata(admin.publicKey, lpMint),
-        tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })

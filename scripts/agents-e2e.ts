@@ -11,7 +11,7 @@
 import { execFileSync } from "child_process";
 import { BN } from "@coral-xyz/anchor";
 import { Keypair, LAMPORTS_PER_SOL, PublicKey, SystemProgram } from "@solana/web3.js";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import {
   RPC,
   ROOT,
@@ -35,7 +35,7 @@ const conn = connection();
 const keeper = keeperKeypair();
 const kp = programFor(keeper, conn);
 const sys = {
-  tokenProgram: TOKEN_PROGRAM_ID,
+  tokenProgram: TOKEN_2022_PROGRAM_ID,
   associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
   systemProgram: SystemProgram.programId,
 };
@@ -121,7 +121,7 @@ async function main() {
   const earnOpen = (s: string, ltv: number) =>
     up.methods
       .earnDeposit(new BN(10e8), ltv)
-      .accountsPartial({ user: user.publicKey, position: positionPda(user.publicKey, marketAccounts(s).market, "earn"), ...rails(s), userStock: ata(user.publicKey, marketAccounts(s).stockMint), tokenProgram: TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
+      .accountsPartial({ user: user.publicKey, position: positionPda(user.publicKey, marketAccounts(s).market, "earn"), ...rails(s), userStock: ata(user.publicKey, marketAccounts(s).stockMint), tokenProgram: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId })
       .rpc();
   await earnOpen("TSLA", 2000);
   await earnOpen("NVDA", 2900);
@@ -129,7 +129,7 @@ async function main() {
   const amp = positionPda(user.publicKey, spy.market, "amplify");
   await up.methods
     .amplifyOpen(new BN(10e8), 16000)
-    .accountsPartial({ user: user.publicKey, position: amp, ...rails("SPY"), userStock: ata(user.publicKey, spy.stockMint), tokenProgram: TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
+    .accountsPartial({ user: user.publicKey, position: amp, ...rails("SPY"), userStock: ata(user.publicKey, spy.stockMint), tokenProgram: TOKEN_2022_PROGRAM_ID, systemProgram: SystemProgram.programId })
     .rpc();
   const tslaPos = positionPda(user.publicKey, marketAccounts("TSLA").market, "earn");
   const nvdaPos = positionPda(user.publicKey, marketAccounts("NVDA").market, "earn");
@@ -187,7 +187,7 @@ async function main() {
 
   // A stranger calling an agent on a position that is on target.
   try {
-    await lp.methods.rebalance().accountsPartial({ caller: liq.publicKey, position: tslaPos, ...rails("TSLA"), tokenProgram: TOKEN_PROGRAM_ID }).rpc();
+    await lp.methods.rebalance().accountsPartial({ caller: liq.publicKey, position: tslaPos, ...rails("TSLA"), tokenProgram: TOKEN_2022_PROGRAM_ID }).rpc();
     check("rebalance on target refused", false);
   } catch (e: any) {
     check("rebalance on target refused", String(e).includes("AlreadyOnTarget"));

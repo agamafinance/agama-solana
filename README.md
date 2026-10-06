@@ -102,10 +102,52 @@ to pass the exact swap amount and calldata, with an on-chain slippage floor
 against griefing; here the swap is priced inside the instruction off the same
 oracle, so an agent has nothing to choose and nothing to skim.
 
+## Confidential balances
+
+Every token Agama mints (USDC, the four stocks, the LP token) is a Token-2022
+mint with the **confidential transfer extension**. A holder can move any of
+them into an encrypted balance and send them to anyone without the amount ever
+appearing on chain: balances and transfer amounts are ElGamal ciphertexts, and
+the ZK proofs that keep them honest (no negative balances, no minted value)
+are checked on chain by Solana's ZK ElGamal proof program.
+
+| | Public | Private |
+|---|---|---|
+| What you hold of each token | | encrypted, only your keys read it |
+| Sending to someone else | | amount hidden from everyone but the two of you |
+| Depositing into Earn, Amplify, Lend | amount visible | |
+| What comes back on close or withdraw | amount visible, then shielded again | |
+| Positions (collateral, debt, target) | program state, readable by anyone | |
+
+A program cannot price a loan it cannot read, so positions stay public: what
+the encryption hides is everything around them, how much you hold, where it
+goes, who you pay. The mints have no auditor key and no authority that could
+add one later.
+
+- **Keys.** Derived from one wallet signature over `solana-conf-bal/v1`, the
+  standard every Token-2022 client uses, so the same wallet reads the same
+  balances in any app.
+- **Cost.** Shielding is two transactions (deposit, apply). A private send
+  is five and an unshield four: the range and equality proofs do not fit in one
+  transaction, so they are verified into context accounts first and closed
+  afterwards, rent back.
+- **Rounding never reaches the wallet.** A holder whose USDC is all private has
+  zero public USDC, so `earn_close` writes off a rounding gap of up to 0.0001
+  USDC between the vault shares and the debt instead of asking the wallet for it.
+- **Tooling.** Proofs come from `@solana/zk-sdk` (Anza's WASM build of
+  `solana-zk-sdk`) through the Kit client `@solana-program/token-2022/confidential`.
+  Local validators need agave 4.3 or later (3.1 rejects these proofs) and
+  devnet's Token-2022 build (the genesis copy predates the instruction layout).
+
+`pnpm private-e2e` runs it: shield, private sends, a stranger's view, unshield
+into Earn, close and shield back, lend from private, every balance decrypted
+and checked exactly.
+
 ## Where it lives
 
 | | |
 |---|---|
+| Status | Devnet still runs the previous build (classic SPL mints). The Token-2022 confidential build in this branch is verified locally and waits for its devnet upgrade. |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) (devnet) |
 | Every address | [`deployments/devnet.json`](deployments/devnet.json) |
 | IDL | [`idl/agama_solana.json`](idl/agama_solana.json) |
@@ -121,8 +163,7 @@ oracle, so an agent has nothing to choose and nothing to skim.
   the vault pays out more than it took in, the difference is minted and counted
   in `coupons_paid`. It is the only place the program creates dollars.
 - **The keeper is trusted for the session flag**, bounded for the price.
-- **Classic SPL Token only.** Mainnet xStocks are Token-2022; moving the
-  custody to `token_interface` is the first mainnet change.
+- **Token-2022 throughout**, like the mainnet xStocks.
 - Pyth's public Hermes endpoint now answers 401 without an API key, so the
   keeper reads Jupiter's price API, which returns both the token price and the
   underlying share's price for every xStock.
@@ -131,13 +172,14 @@ oracle, so an agent has nothing to choose and nothing to skim.
 
 ```bash
 anchor build                      # or: cargo build-sbf --manifest-path programs/agama-solana/Cargo.toml
-cargo test                        # 10 LiteSVM flows against the built program, plus unit tests
+cargo test                        # 12 LiteSVM flows against the built program, plus unit tests
 ./scripts/check.sh                # everything CI runs, before pushing
 pnpm install
 pnpm setup                        # initialize, 4 markets, first prices, seed the pool (idempotent)
 pnpm e2e                          # 9 real transactions on devnet from a fresh wallet
-pnpm e2e:local                    # throwaway validator: setup, the e2e, then the agents
-                                  # through the real keeper with prices moved on purpose (17 checks)
+pnpm e2e:local                    # throwaway validator: setup, the e2e, the agents through
+                                  # the real keeper with prices moved on purpose (17 checks),
+                                  # then the private path (12 checks). VALIDATOR=agave 4.3+
 pnpm state                        # live pool, vault, prices and their age, positions, keeper
 pnpm keeper                       # prices + agents, every 30 s
 ```

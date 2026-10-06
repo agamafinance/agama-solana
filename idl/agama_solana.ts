@@ -49,7 +49,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -67,7 +70,10 @@ export type AgamaSolana = {
                   116,
                   111,
                   99,
-                  107
+                  107,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -90,7 +96,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -114,7 +123,10 @@ export type AgamaSolana = {
                   116,
                   111,
                   100,
-                  121
+                  121,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -126,7 +138,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "systemProgram",
@@ -189,7 +201,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -208,7 +223,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -234,7 +252,10 @@ export type AgamaSolana = {
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -290,41 +311,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -372,7 +360,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "associatedTokenProgram",
@@ -422,7 +410,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -441,7 +432,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -467,7 +461,10 @@ export type AgamaSolana = {
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -523,41 +520,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -605,7 +569,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "systemProgram",
@@ -660,7 +624,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -679,7 +646,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -708,7 +678,10 @@ export type AgamaSolana = {
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -749,7 +722,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
       "args": []
@@ -791,7 +764,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -810,7 +786,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -836,7 +815,10 @@ export type AgamaSolana = {
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -889,41 +871,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -979,41 +928,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -1061,7 +977,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "associatedTokenProgram",
@@ -1111,7 +1027,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1130,7 +1049,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -1156,7 +1078,10 @@ export type AgamaSolana = {
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -1209,41 +1134,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -1291,7 +1183,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "systemProgram",
@@ -1344,7 +1236,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1363,7 +1258,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -1389,7 +1287,10 @@ export type AgamaSolana = {
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -1434,7 +1335,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
       "args": [
@@ -1476,7 +1377,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1494,7 +1398,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -1519,41 +1426,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -1601,7 +1475,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "associatedTokenProgram",
@@ -1646,7 +1520,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1666,41 +1543,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -1748,7 +1592,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "associatedTokenProgram",
@@ -1794,7 +1638,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1811,7 +1658,10 @@ export type AgamaSolana = {
                   117,
                   115,
                   100,
-                  99
+                  99,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1826,7 +1676,10 @@ export type AgamaSolana = {
                 "kind": "const",
                 "value": [
                   108,
-                  112
+                  112,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1848,7 +1701,10 @@ export type AgamaSolana = {
                   117,
                   115,
                   100,
-                  99
+                  99,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1871,7 +1727,10 @@ export type AgamaSolana = {
                   117,
                   115,
                   100,
-                  99
+                  99,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1879,7 +1738,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "systemProgram",
@@ -1934,7 +1793,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -1953,7 +1815,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -1982,7 +1847,10 @@ export type AgamaSolana = {
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -2031,41 +1899,8 @@ export type AgamaSolana = {
                 "path": "liquidator"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -2121,41 +1956,8 @@ export type AgamaSolana = {
                 "path": "liquidator"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -2203,7 +2005,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "associatedTokenProgram",
@@ -2252,7 +2054,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2300,7 +2105,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2319,7 +2127,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -2381,7 +2192,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2400,7 +2214,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -2429,7 +2246,10 @@ export type AgamaSolana = {
                   116,
                   105,
                   111,
-                  110
+                  110,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -2470,7 +2290,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
       "args": []
@@ -2509,7 +2329,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2528,7 +2351,10 @@ export type AgamaSolana = {
                   114,
                   107,
                   101,
-                  116
+                  116,
+                  46,
+                  118,
+                  50
                 ]
               },
               {
@@ -2586,7 +2412,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2637,7 +2466,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2664,41 +2496,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -2754,41 +2553,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -2836,7 +2602,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "associatedTokenProgram",
@@ -2887,7 +2653,10 @@ export type AgamaSolana = {
                   111,
                   99,
                   111,
-                  108
+                  108,
+                  46,
+                  118,
+                  50
                 ]
               }
             ]
@@ -2914,41 +2683,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -3004,41 +2740,8 @@ export type AgamaSolana = {
                 "path": "user"
               },
               {
-                "kind": "const",
-                "value": [
-                  6,
-                  221,
-                  246,
-                  225,
-                  215,
-                  101,
-                  161,
-                  147,
-                  217,
-                  203,
-                  225,
-                  70,
-                  206,
-                  235,
-                  121,
-                  172,
-                  28,
-                  180,
-                  133,
-                  237,
-                  95,
-                  91,
-                  55,
-                  145,
-                  58,
-                  140,
-                  245,
-                  133,
-                  126,
-                  255,
-                  0,
-                  169
-                ]
+                "kind": "account",
+                "path": "tokenProgram"
               },
               {
                 "kind": "account",
@@ -3086,7 +2789,7 @@ export type AgamaSolana = {
         },
         {
           "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         },
         {
           "name": "associatedTokenProgram",

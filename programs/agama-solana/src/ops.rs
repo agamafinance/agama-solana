@@ -2,7 +2,7 @@
 //! transfers live side by side here so one cannot move without the other.
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Burn, MintTo, Transfer};
+use anchor_spl::token_interface::{self as token, Burn, MintTo, TransferChecked};
 
 use crate::errors::AgamaError;
 use crate::math::*;
@@ -25,6 +25,8 @@ impl<'info> Pipes<'info> {
         &self,
         from: &AccountInfo<'info>,
         to: &AccountInfo<'info>,
+        mint: &AccountInfo<'info>,
+        decimals: u8,
         amount: u64,
     ) -> Result<()> {
         if amount == 0 {
@@ -32,19 +34,38 @@ impl<'info> Pipes<'info> {
         }
         let bump = [self.bump];
         let seeds: &[&[u8]] = &[PROTOCOL_SEED, &bump];
-        #[allow(deprecated)]
-        token::transfer(
+        token::transfer_checked(
             CpiContext::new_with_signer(
                 self.token_program,
-                Transfer {
+                TransferChecked {
                     from: from.clone(),
+                    mint: mint.clone(),
                     to: to.clone(),
                     authority: self.authority.clone(),
                 },
                 &[seeds],
             ),
             amount,
+            decimals,
         )
+    }
+
+    pub fn send_usdc(
+        &self,
+        from: &AccountInfo<'info>,
+        to: &AccountInfo<'info>,
+        amount: u64,
+    ) -> Result<()> {
+        self.send(from, to, &self.usdc_mint, USDC_DECIMALS, amount)
+    }
+
+    pub fn send_stock(
+        &self,
+        from: &AccountInfo<'info>,
+        to: &AccountInfo<'info>,
+        amount: u64,
+    ) -> Result<()> {
+        self.send(from, to, &self.stock_mint, STOCK_DECIMALS, amount)
     }
 
     pub fn mint(
@@ -135,6 +156,15 @@ pub fn repay(p: &mut Protocol, m: &mut Market, pos: &mut Position, amount: u64) 
     Ok(applied)
 }
 
+/// Drop what is left of `pos`'s debt without cash coming in. Only for
+/// rounding dust: the lenders carry it.
+pub fn write_off(p: &mut Protocol, m: &mut Market, pos: &mut Position) {
+    let scaled = pos.scaled_debt;
+    pos.scaled_debt = 0;
+    m.total_scaled_debt = m.total_scaled_debt.saturating_sub(scaled);
+    p.total_scaled_debt = p.total_scaled_debt.saturating_sub(scaled);
+}
+
 // ---------------------------------------------------------------------------
 // Vault
 // ---------------------------------------------------------------------------
@@ -179,7 +209,7 @@ pub fn borrow_to_vault(
     amount: u64,
 ) -> Result<()> {
     borrow(p, m, pos, amount)?;
-    pipes.send(&pipes.pool_usdc, &pipes.vault_usdc, amount)?;
+    pipes.send_usdc(&pipes.pool_usdc, &pipes.vault_usdc, amount)?;
     vault_in(p, pos, amount)?;
     Ok(())
 }
@@ -197,7 +227,7 @@ pub fn repay_from_buffer(
         return Ok(0);
     }
     vault_take(p, pos, pipes, usdc)?;
-    pipes.send(&pipes.vault_usdc, &pipes.pool_usdc, usdc)?;
+    pipes.send_usdc(&pipes.vault_usdc, &pipes.pool_usdc, usdc)?;
     repay(p, m, pos, usdc)
 }
 

@@ -5,7 +5,7 @@ import os from "os";
 import path from "path";
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 export const RPC = process.env.SOLANA_RPC ?? "https://rpc.magicblock.app/devnet";
 export const ROOT = path.join(__dirname, "..");
@@ -15,11 +15,11 @@ export const PROGRAM_ID = new PublicKey(idl.address);
 const seed = (s: string) => Buffer.from(s);
 export const pda = (...seeds: Buffer[]) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 
-export const protocolPda = pda(seed("protocol"));
-export const usdcMint = pda(seed("usdc"));
-export const lpMint = pda(seed("lp"));
-export const poolUsdc = pda(seed("pool_usdc"));
-export const vaultUsdc = pda(seed("vault_usdc"));
+export const protocolPda = pda(seed("protocol.v2"));
+export const usdcMint = pda(seed("usdc.v2"));
+export const lpMint = pda(seed("lp.v2"));
+export const poolUsdc = pda(seed("pool_usdc.v2"));
+export const vaultUsdc = pda(seed("vault_usdc.v2"));
 
 export function symbolBytes(sym: string): number[] {
   const b = Buffer.alloc(8);
@@ -38,17 +38,20 @@ export const MARKETS = [
 ] as const;
 
 export function marketAccounts(symbol: string) {
-  const stockMint = pda(seed("stock"), Buffer.from(symbolBytes(symbol)));
-  const market = pda(seed("market"), stockMint.toBuffer());
-  const custody = pda(seed("custody"), market.toBuffer());
+  const stockMint = pda(seed("stock.v2"), Buffer.from(symbolBytes(symbol)));
+  const market = pda(seed("market.v2"), stockMint.toBuffer());
+  const custody = pda(seed("custody.v2"), market.toBuffer());
   return { stockMint, market, custody };
 }
 
 export function positionPda(owner: PublicKey, market: PublicKey, kind: "earn" | "amplify") {
-  return pda(seed("position"), owner.toBuffer(), market.toBuffer(), seed(kind));
+  return pda(seed("position.v2"), owner.toBuffer(), market.toBuffer(), seed(kind));
 }
 
-export const ata = (owner: PublicKey, mint: PublicKey) => getAssociatedTokenAddressSync(mint, owner);
+/// Every Agama mint is Token-2022 (confidential transfer extension).
+export const TOKEN_PROGRAM = TOKEN_2022_PROGRAM_ID;
+export const ata = (owner: PublicKey, mint: PublicKey) =>
+  getAssociatedTokenAddressSync(mint, owner, true, TOKEN_2022_PROGRAM_ID);
 
 export function loadKeypair(file?: string): Keypair {
   const f = file ?? process.env.ANCHOR_WALLET ?? path.join(os.homedir(), ".config/solana/id.json");

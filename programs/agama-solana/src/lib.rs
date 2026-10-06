@@ -16,10 +16,12 @@
 
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token_2022::Token2022;
+use anchor_spl::token_interface::{self as token, Mint, TokenAccount, TransferChecked};
 
 pub mod errors;
 pub mod math;
+pub mod mints;
 pub mod ops;
 pub mod state;
 
@@ -34,6 +36,9 @@ pub const FAUCET_USDC: u64 = 10_000 * 1_000_000;
 pub const FAUCET_STOCK: u64 = 10 * 100_000_000;
 /// Drift around the target the agents tolerate before acting.
 pub const REBALANCE_BAND_BPS: u64 = 100;
+/// Debt left after the vault shares, small enough to write off at close
+/// rather than take from the wallet (100 units = 0.0001 USDC).
+pub const CLOSE_DUST: u64 = 100;
 /// Out-of-band publish time the keeper may claim, in seconds.
 pub const MAX_FUTURE_SKEW: i64 = 60;
 
@@ -53,26 +58,29 @@ macro_rules! pipes {
 }
 
 fn user_transfer<'info>(
-    token_program: &Program<'info, Token>,
+    token_program: &Program<'info, Token2022>,
     from: AccountInfo<'info>,
     to: AccountInfo<'info>,
+    mint: AccountInfo<'info>,
+    decimals: u8,
     authority: AccountInfo<'info>,
     amount: u64,
 ) -> Result<()> {
     if amount == 0 {
         return Ok(());
     }
-    #[allow(deprecated)]
-    token::transfer(
+    token::transfer_checked(
         CpiContext::new(
             token_program.key(),
-            Transfer {
+            TransferChecked {
                 from,
+                mint,
                 to,
                 authority,
             },
         ),
         amount,
+        decimals,
     )
 }
 
@@ -87,6 +95,52 @@ pub mod agama_solana {
     pub fn initialize(ctx: Context<Initialize>, params: ProtocolParams) -> Result<()> {
         params.validate()?;
         let now = Clock::get()?.unix_timestamp;
+        let a = &ctx.accounts;
+        let (payer, tp, sp) = (
+            a.admin.to_account_info(),
+            a.token_program.to_account_info(),
+            a.system_program.to_account_info(),
+        );
+        let authority = a.protocol.key();
+        let b = &ctx.bumps;
+        mints::create_confidential_mint(
+            &payer,
+            &a.usdc_mint,
+            &[USDC_SEED, &[b.usdc_mint]],
+            USDC_DECIMALS,
+            &authority,
+            &tp,
+            &sp,
+        )?;
+        mints::create_confidential_mint(
+            &payer,
+            &a.lp_mint,
+            &[LP_SEED, &[b.lp_mint]],
+            USDC_DECIMALS,
+            &authority,
+            &tp,
+            &sp,
+        )?;
+        let protocol_ai = a.protocol.to_account_info();
+        mints::create_token_account(
+            &payer,
+            &a.pool_usdc,
+            &[POOL_USDC_SEED, &[b.pool_usdc]],
+            &a.usdc_mint,
+            &protocol_ai,
+            &tp,
+            &sp,
+        )?;
+        mints::create_token_account(
+            &payer,
+            &a.vault_usdc,
+            &[VAULT_USDC_SEED, &[b.vault_usdc]],
+            &a.usdc_mint,
+            &protocol_ai,
+            &tp,
+            &sp,
+        )?;
+
         let p = &mut ctx.accounts.protocol;
         p.admin = ctx.accounts.admin.key();
         p.keeper = params.keeper;
@@ -119,6 +173,33 @@ pub mod agama_solana {
         params: MarketParams,
     ) -> Result<()> {
         params.validate()?;
+        let a = &ctx.accounts;
+        let (payer, tp, sp) = (
+            a.admin.to_account_info(),
+            a.token_program.to_account_info(),
+            a.system_program.to_account_info(),
+        );
+        let b = &ctx.bumps;
+        mints::create_confidential_mint(
+            &payer,
+            &a.stock_mint,
+            &[STOCK_SEED, symbol.as_ref(), &[b.stock_mint]],
+            STOCK_DECIMALS,
+            &a.protocol.key(),
+            &tp,
+            &sp,
+        )?;
+        let market_key = a.market.key();
+        mints::create_token_account(
+            &payer,
+            &a.custody,
+            &[CUSTODY_SEED, market_key.as_ref(), &[b.custody]],
+            &a.stock_mint,
+            &a.protocol.to_account_info(),
+            &tp,
+            &sp,
+        )?;
+
         let m = &mut ctx.accounts.market;
         m.stock_mint = ctx.accounts.stock_mint.key();
         m.custody = ctx.accounts.custody.key();
@@ -232,6 +313,8 @@ pub mod agama_solana {
             &a.token_program,
             a.user_usdc.to_account_info(),
             a.pool_usdc.to_account_info(),
+            a.usdc_mint.to_account_info(),
+            USDC_DECIMALS,
             a.user.to_account_info(),
             amount,
         )?;
@@ -282,18 +365,19 @@ pub mod agama_solana {
         )?;
         let bump = [a.protocol.bump];
         let seeds: &[&[u8]] = &[PROTOCOL_SEED, &bump];
-        #[allow(deprecated)]
-        token::transfer(
+        token::transfer_checked(
             CpiContext::new_with_signer(
                 a.token_program.key(),
-                Transfer {
+                TransferChecked {
                     from: a.pool_usdc.to_account_info(),
+                    mint: a.usdc_mint.to_account_info(),
                     to: a.user_usdc.to_account_info(),
                     authority: a.protocol.to_account_info(),
                 },
                 &[seeds],
             ),
             usdc,
+            USDC_DECIMALS,
         )?;
         a.protocol.cash -= usdc;
         emit!(Withdrawn {
@@ -332,6 +416,8 @@ pub mod agama_solana {
             &a.token_program,
             a.user_stock.to_account_info(),
             a.custody.to_account_info(),
+            a.stock_mint.to_account_info(),
+            STOCK_DECIMALS,
             a.user.to_account_info(),
             amount,
         )?;
@@ -381,12 +467,21 @@ pub mod agama_solana {
 
         let debt = pos.debt(p)?;
         let from_buffer = repay_from_buffer(p, m, pos, &pipes, debt)?;
-        let shortfall = pos.debt(p)?;
+        let mut shortfall = pos.debt(p)?;
+        if shortfall > 0 && shortfall <= CLOSE_DUST {
+            // Rounding between the vault and the debt, a few millionths of a
+            // dollar. Asking the wallet for it would fail for a holder whose
+            // USDC is all in a confidential balance, so the pool absorbs it.
+            write_off(p, m, pos);
+            shortfall = 0;
+        }
         if shortfall > 0 {
             user_transfer(
                 &a.token_program,
                 a.user_usdc.to_account_info(),
                 a.pool_usdc.to_account_info(),
+                a.usdc_mint.to_account_info(),
+                USDC_DECIMALS,
                 a.user.to_account_info(),
                 shortfall,
             )?;
@@ -394,13 +489,13 @@ pub mod agama_solana {
         }
         let leftover = p.shares_value(pos.shares)?;
         vault_take(p, pos, &pipes, leftover)?;
-        pipes.send(&pipes.vault_usdc, &a.user_usdc.to_account_info(), leftover)?;
+        pipes.send_usdc(&pipes.vault_usdc, &a.user_usdc.to_account_info(), leftover)?;
         // Rounding dust: shares worth less than a unit.
         p.vault_shares = p.vault_shares.saturating_sub(pos.shares);
         pos.shares = 0;
 
         let stock = pos.collateral;
-        pipes.send(&pipes.custody, &a.user_stock.to_account_info(), stock)?;
+        pipes.send_stock(&pipes.custody, &a.user_stock.to_account_info(), stock)?;
         m.total_collateral -= stock;
         pos.collateral = 0;
         emit!(EarnClosed {
@@ -445,6 +540,8 @@ pub mod agama_solana {
             &a.token_program,
             a.user_stock.to_account_info(),
             a.custody.to_account_info(),
+            a.stock_mint.to_account_info(),
+            STOCK_DECIMALS,
             a.user.to_account_info(),
             amount,
         )?;
@@ -496,7 +593,7 @@ pub mod agama_solana {
             repay(p, m, pos, debt)?;
         }
         let stock = pos.collateral;
-        pipes.send(&pipes.custody, &a.user_stock.to_account_info(), stock)?;
+        pipes.send_stock(&pipes.custody, &a.user_stock.to_account_info(), stock)?;
         m.total_collateral -= stock;
         pos.collateral = 0;
         emit!(AmplifyClosed {
@@ -630,11 +727,13 @@ pub mod agama_solana {
             &a.token_program,
             a.liquidator_usdc.to_account_info(),
             a.pool_usdc.to_account_info(),
+            a.usdc_mint.to_account_info(),
+            USDC_DECIMALS,
             a.liquidator.to_account_info(),
             repay_amt,
         )?;
         repay(p, m, pos, repay_amt)?;
-        pipes.send(&pipes.custody, &a.liquidator_stock.to_account_info(), seize)?;
+        pipes.send_stock(&pipes.custody, &a.liquidator_stock.to_account_info(), seize)?;
         pos.collateral -= seize;
         m.total_collateral -= seize;
         pos.record(a.liquidator.key(), now, OP_LIQUIDATED, seize);
@@ -740,27 +839,19 @@ pub struct Initialize<'info> {
     pub admin: Signer<'info>,
     #[account(init, payer = admin, space = 8 + Protocol::INIT_SPACE, seeds = [PROTOCOL_SEED], bump)]
     pub protocol: Box<Account<'info, Protocol>>,
-    #[account(
-        init, payer = admin, seeds = [USDC_SEED], bump,
-        mint::decimals = USDC_DECIMALS, mint::authority = protocol,
-    )]
-    pub usdc_mint: Box<Account<'info, Mint>>,
-    #[account(
-        init, payer = admin, seeds = [LP_SEED], bump,
-        mint::decimals = USDC_DECIMALS, mint::authority = protocol,
-    )]
-    pub lp_mint: Box<Account<'info, Mint>>,
-    #[account(
-        init, payer = admin, seeds = [POOL_USDC_SEED], bump,
-        token::mint = usdc_mint, token::authority = protocol,
-    )]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
-    #[account(
-        init, payer = admin, seeds = [VAULT_USDC_SEED], bump,
-        token::mint = usdc_mint, token::authority = protocol,
-    )]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    /// CHECK: created in the handler as a confidential Token-2022 mint.
+    #[account(mut, seeds = [USDC_SEED], bump)]
+    pub usdc_mint: UncheckedAccount<'info>,
+    /// CHECK: created in the handler as a confidential Token-2022 mint.
+    #[account(mut, seeds = [LP_SEED], bump)]
+    pub lp_mint: UncheckedAccount<'info>,
+    /// CHECK: created in the handler, a USDC account owned by `protocol`.
+    #[account(mut, seeds = [POOL_USDC_SEED], bump)]
+    pub pool_usdc: UncheckedAccount<'info>,
+    /// CHECK: created in the handler, a USDC account owned by `protocol`.
+    #[account(mut, seeds = [VAULT_USDC_SEED], bump)]
+    pub vault_usdc: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
 }
 
@@ -778,22 +869,18 @@ pub struct AddMarket<'info> {
     pub admin: Signer<'info>,
     #[account(mut, seeds = [PROTOCOL_SEED], bump = protocol.bump, has_one = admin @ AgamaError::NotAdmin)]
     pub protocol: Box<Account<'info, Protocol>>,
-    #[account(
-        init, payer = admin, seeds = [STOCK_SEED, symbol.as_ref()], bump,
-        mint::decimals = STOCK_DECIMALS, mint::authority = protocol,
-    )]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    /// CHECK: created in the handler as a confidential Token-2022 mint.
+    #[account(mut, seeds = [STOCK_SEED, symbol.as_ref()], bump)]
+    pub stock_mint: UncheckedAccount<'info>,
     #[account(
         init, payer = admin, space = 8 + Market::INIT_SPACE,
         seeds = [MARKET_SEED, stock_mint.key().as_ref()], bump,
     )]
     pub market: Box<Account<'info, Market>>,
-    #[account(
-        init, payer = admin, seeds = [CUSTODY_SEED, market.key().as_ref()], bump,
-        token::mint = stock_mint, token::authority = protocol,
-    )]
-    pub custody: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    /// CHECK: created in the handler, a stock account owned by `protocol`.
+    #[account(mut, seeds = [CUSTODY_SEED, market.key().as_ref()], bump)]
+    pub custody: UncheckedAccount<'info>,
+    pub token_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
 }
 
@@ -822,13 +909,14 @@ pub struct FaucetUsdc<'info> {
     #[account(seeds = [PROTOCOL_SEED], bump = protocol.bump)]
     pub protocol: Box<Account<'info, Protocol>>,
     #[account(mut, address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(
         init_if_needed, payer = user,
         associated_token::mint = usdc_mint, associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
-    pub user_usdc: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub user_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -842,13 +930,14 @@ pub struct FaucetStock<'info> {
     #[account(seeds = [MARKET_SEED, market.stock_mint.as_ref()], bump = market.bump)]
     pub market: Box<Account<'info, Market>>,
     #[account(mut, address = market.stock_mint)]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    pub stock_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(
         init_if_needed, payer = user,
         associated_token::mint = stock_mint, associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
-    pub user_stock: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub user_stock: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -860,19 +949,20 @@ pub struct Lend<'info> {
     #[account(mut, seeds = [PROTOCOL_SEED], bump = protocol.bump)]
     pub protocol: Box<Account<'info, Protocol>>,
     #[account(address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.lp_mint)]
-    pub lp_mint: Box<Account<'info, Mint>>,
+    pub lp_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.pool_usdc)]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
-    #[account(mut, associated_token::mint = usdc_mint, associated_token::authority = user)]
-    pub user_usdc: Box<Account<'info, TokenAccount>>,
+    pub pool_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = usdc_mint, associated_token::authority = user, associated_token::token_program = token_program)]
+    pub user_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed, payer = user,
         associated_token::mint = lp_mint, associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
-    pub user_lp: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub user_lp: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -891,18 +981,18 @@ pub struct EarnDeposit<'info> {
     )]
     pub position: Box<Account<'info, Position>>,
     #[account(mut, address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = market.stock_mint)]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    pub stock_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.pool_usdc)]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
+    pub pool_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = protocol.vault_usdc)]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = market.custody)]
-    pub custody: Box<Account<'info, TokenAccount>>,
-    #[account(mut, associated_token::mint = stock_mint, associated_token::authority = user)]
-    pub user_stock: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub custody: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = stock_mint, associated_token::authority = user, associated_token::token_program = token_program)]
+    pub user_stock: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
 }
 
@@ -920,16 +1010,16 @@ pub struct EarnOwner<'info> {
     )]
     pub position: Box<Account<'info, Position>>,
     #[account(mut, address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = market.stock_mint)]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    pub stock_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.pool_usdc)]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
+    pub pool_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = protocol.vault_usdc)]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = market.custody)]
-    pub custody: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub custody: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
 }
 
 #[derive(Accounts)]
@@ -947,26 +1037,28 @@ pub struct EarnClose<'info> {
     )]
     pub position: Box<Account<'info, Position>>,
     #[account(mut, address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = market.stock_mint)]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    pub stock_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.pool_usdc)]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
+    pub pool_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = protocol.vault_usdc)]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = market.custody)]
-    pub custody: Box<Account<'info, TokenAccount>>,
+    pub custody: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed, payer = user,
         associated_token::mint = usdc_mint, associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
-    pub user_usdc: Box<Account<'info, TokenAccount>>,
+    pub user_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed, payer = user,
         associated_token::mint = stock_mint, associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
-    pub user_stock: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub user_stock: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -985,18 +1077,18 @@ pub struct AmplifyOpen<'info> {
     )]
     pub position: Box<Account<'info, Position>>,
     #[account(mut, address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = market.stock_mint)]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    pub stock_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.pool_usdc)]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
+    pub pool_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = protocol.vault_usdc)]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = market.custody)]
-    pub custody: Box<Account<'info, TokenAccount>>,
-    #[account(mut, associated_token::mint = stock_mint, associated_token::authority = user)]
-    pub user_stock: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub custody: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = stock_mint, associated_token::authority = user, associated_token::token_program = token_program)]
+    pub user_stock: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1015,21 +1107,22 @@ pub struct AmplifyClose<'info> {
     )]
     pub position: Box<Account<'info, Position>>,
     #[account(mut, address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = market.stock_mint)]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    pub stock_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.pool_usdc)]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
+    pub pool_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = protocol.vault_usdc)]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = market.custody)]
-    pub custody: Box<Account<'info, TokenAccount>>,
+    pub custody: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed, payer = user,
         associated_token::mint = stock_mint, associated_token::authority = user,
+        associated_token::token_program = token_program,
     )]
-    pub user_stock: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub user_stock: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -1048,16 +1141,16 @@ pub struct Agent<'info> {
     )]
     pub position: Box<Account<'info, Position>>,
     #[account(mut, address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = market.stock_mint)]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    pub stock_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.pool_usdc)]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
+    pub pool_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = protocol.vault_usdc)]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = market.custody)]
-    pub custody: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub custody: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
 }
 
 #[derive(Accounts)]
@@ -1075,23 +1168,24 @@ pub struct Liquidate<'info> {
     )]
     pub position: Box<Account<'info, Position>>,
     #[account(mut, address = protocol.usdc_mint)]
-    pub usdc_mint: Box<Account<'info, Mint>>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = market.stock_mint)]
-    pub stock_mint: Box<Account<'info, Mint>>,
+    pub stock_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(mut, address = protocol.pool_usdc)]
-    pub pool_usdc: Box<Account<'info, TokenAccount>>,
+    pub pool_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = protocol.vault_usdc)]
-    pub vault_usdc: Box<Account<'info, TokenAccount>>,
+    pub vault_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(mut, address = market.custody)]
-    pub custody: Box<Account<'info, TokenAccount>>,
-    #[account(mut, associated_token::mint = usdc_mint, associated_token::authority = liquidator)]
-    pub liquidator_usdc: Box<Account<'info, TokenAccount>>,
+    pub custody: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(mut, associated_token::mint = usdc_mint, associated_token::authority = liquidator, associated_token::token_program = token_program)]
+    pub liquidator_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed, payer = liquidator,
         associated_token::mint = stock_mint, associated_token::authority = liquidator,
+        associated_token::token_program = token_program,
     )]
-    pub liquidator_stock: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    pub liquidator_stock: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub token_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }

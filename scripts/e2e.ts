@@ -9,7 +9,7 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import {
   ata,
   connection,
@@ -27,7 +27,7 @@ import {
 const conn = connection();
 const admin = loadKeypair();
 const sys = {
-  tokenProgram: TOKEN_PROGRAM_ID,
+  tokenProgram: TOKEN_2022_PROGRAM_ID,
   associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
   systemProgram: SystemProgram.programId,
 };
@@ -85,7 +85,7 @@ async function main() {
         position: earn,
         ...rails("TSLA"),
         userStock: ata(user.publicKey, tsla.stockMint),
-        tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .rpc(),
@@ -98,7 +98,7 @@ async function main() {
     "earn: move the slider to 24%",
     await program.methods
       .earnSetTarget(2400)
-      .accountsPartial({ user: user.publicKey, position: earn, ...rails("TSLA"), tokenProgram: TOKEN_PROGRAM_ID })
+      .accountsPartial({ user: user.publicKey, position: earn, ...rails("TSLA"), tokenProgram: TOKEN_2022_PROGRAM_ID })
       .rpc(),
   );
 
@@ -113,7 +113,7 @@ async function main() {
         position: amp,
         ...rails("SPY"),
         userStock: ata(user.publicKey, spy.stockMint),
-        tokenProgram: TOKEN_PROGRAM_ID,
+        tokenProgram: TOKEN_2022_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .rpc(),
@@ -141,7 +141,7 @@ async function main() {
   try {
     await stranger.methods
       .rebalance()
-      .accountsPartial({ caller: admin.publicKey, position: earn, ...rails("TSLA"), tokenProgram: TOKEN_PROGRAM_ID })
+      .accountsPartial({ caller: admin.publicKey, position: earn, ...rails("TSLA"), tokenProgram: TOKEN_2022_PROGRAM_ID })
       .rpc();
     throw new Error("rebalance on target should have refused");
   } catch (e: any) {
