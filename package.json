@@ -1,0 +1,23 @@
+{
+  "name": "agama-solana",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "setup": "tsx scripts/setup.ts",
+    "keeper": "tsx scripts/keeper.ts",
+    "e2e": "tsx scripts/e2e.ts",
+    "state": "tsx scripts/state.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "idl": "anchor build && cp target/idl/agama_solana.json target/types/agama_solana.ts idl/"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.32.1",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.98.4",
+    "tsx": "^4.23.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.3"
+  }
+}

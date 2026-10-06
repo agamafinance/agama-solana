@@ -1,0 +1,45 @@
+{
+  "cluster": "devnet",
+  "program": "6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D",
+  "admin": "3ajScG7GzakXjdZKxuKjFgvfmDvGhwe2viyy5qoTodRp",
+  "keeper": "31aJvz8ThCmr8DNwQbXUJG2pCsrd3heixHvbzqrZvPpU",
+  "protocol": "DoyuajjbvhysP4TBM9qoFVcL56L5AfUysmkJRzLn76uz",
+  "usdcMint": "AZfVquAP7RNKXTu9K4h896rpbHzT9jVg93n4Z8GziYe4",
+  "lpMint": "EFmAyGMeiCNriSaQZHr7bJESzj38QJ4gSuNtMRbsX1Gy",
+  "poolUsdc": "63ZRx39T7XRHgMjDibUbSGiQKEoWHSZtmFh1dYnBvLJR",
+  "vaultUsdc": "AxJShiwVeFDKFuzixh6N27Ysh51w1ALcdaGSD6331qmc",
+  "markets": {
+    "TSLA": {
+      "market": "8ErysrpJm3hUX177nzspiwxDRrXnBavFfwreGYbLSgzC",
+      "stockMint": "He47svxVvSEBKgxqtTwf1tVeHM8wztyAxVgfuWpGSmeG",
+      "custody": "9C29h2atJo5EjDenAFBsWuj1B5u7hXqhk9m9WyHuKA3h",
+      "ltvBps": 3000,
+      "ltBps": 4000,
+      "tracks": "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB"
+    },
+    "NVDA": {
+      "market": "F97rM6UFbeDW2B7on9QCYLN59dh1aSCmBokNnS8rRD2Z",
+      "stockMint": "4P7eqLUumQKPuoxxpM5RN3rnPMgrUAg1JAEp1FQSgejL",
+      "custody": "Ab6mfAGYuKkQM7jpHevcZB5YQ8ZCrCEAJDsvVw2qdDPV",
+      "ltvBps": 3000,
+      "ltBps": 4000,
+      "tracks": "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh"
+    },
+    "AAPL": {
+      "market": "Bj6Fz5tNDwqvkyN8L1UW4EqcosGWxsp5ys8MELWjNAK3",
+      "stockMint": "CGb7vt9jp4KMmRvaxkueWCGfQBNFY2mVvFPJHPDA41j6",
+      "custody": "2h5TdypT4vapMy5Wg3nnsy4xdZeEmKJj5QHNRrrXrVL3",
+      "ltvBps": 3500,
+      "ltBps": 4500,
+      "tracks": "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp"
+    },
+    "SPY": {
+      "market": "HGfWRt8F2y7EDCqQJkbrPsDQXPJygDSpbuKytyAJJDsf",
+      "stockMint": "FnwCJsBKMMrQc5QQ87Z4CUN7VoT7fNHPfJNmdmKzHMp8",
+      "custody": "GxuW9fu7jN1277XLaGMa1ezNPk1iQejKm2iDYCWtZTuX",
+      "ltvBps": 5000,
+      "ltBps": 6000,
+      "tracks": "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W"
+    }
+  }
+}

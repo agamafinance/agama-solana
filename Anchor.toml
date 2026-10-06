@@ -1,0 +1,19 @@
+[toolchain]
+package_manager = "pnpm"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+agama_solana = "6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D"
+
+[programs.devnet]
+agama_solana = "6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "cargo test"

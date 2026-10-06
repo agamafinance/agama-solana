@@ -1,0 +1,10 @@
+target/
+node_modules/
+.keys/
+.env
+.env.local
+test-ledger/
+.next/
+.vercel/
+*.tsbuildinfo
+.DS_Store
