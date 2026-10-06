@@ -61,7 +61,7 @@ export default function SolanaFaucetPage() {
     <>
       <Hero title={<>Faucet</>}>
         <p className="mt-4 max-w-[640px] text-[15px] text-fg-muted">
-          Everything the app needs, in one approval: 10,000 USDC and 10 of each stock and of GLDY, devnet stand-ins
+          Everything the app needs, in one approval: 10,000 USDC and 10 of each stock and of gold (XAUt0), devnet stand-ins
           minted by the Agama program and shielded straight into your private balance. About 15 transactions the
           first time (each private balance is set up once, with a proof), fewer after. Fees are in devnet SOL, from{' '}
           <a href="https://faucet.solana.com" target="_blank" rel="noreferrer" className="underline">faucet.solana.com</a>.

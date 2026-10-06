@@ -9,8 +9,9 @@
 //   - DexScreener, the deepest USDC pair of each xStock (Raydium, Meteora...):
 //     a second, independent price for the token. If the two disagree by more
 //     than 2%, the market is skipped this run rather than priced off one
-//   - Orca's GLDY/USDC whirlpool (Streamex's gold-backed token, ~1 oz each)
-//     and the gold spot price, as a guard on a thin pool
+//   - gold: XAUt0 (Tether Gold, one ounce per token) on Jupiter and its
+//     deepest DEX pair, Data Streams XAU/USDT x USDT/USD when the credentials
+//     cover them, and gold spot as the guard
 // The DON agrees on the median of every field, decides on its own clock whether
 // each market is in session, and writes signed reports to the Agama program's
 // `on_report` through the Keystone Forwarder, three markets per report (a
@@ -46,7 +47,14 @@ const enc = (s: string) => new TextEncoder().encode(s)
 
 const streams = z.object({ regular: z.string(), extended: z.string(), overnight: z.string() })
 const xstock = z.object({ symbol: z.string().max(8), kind: z.literal('xstock'), mint: z.string(), streams: streams.optional() })
-const gold = z.object({ symbol: z.string().max(8), kind: z.literal('gold'), orcaPool: z.string() })
+// Gold: XAUt0 (Tether Gold, one ounce per token) on Solana, with Data Streams'
+// XAU/USDT times USDT/USD once the credentials cover them.
+const gold = z.object({
+	symbol: z.string().max(8),
+	kind: z.literal('gold'),
+	mint: z.string(),
+	streams: z.object({ xau: z.string(), usdt: z.string() }).optional(),
+})
 
 const configSchema = z.object({
 	schedule: z.string(),
@@ -57,8 +65,6 @@ const configSchema = z.object({
 	dexscreenerUrl: z.string(),
 	/** Two token sources further apart than this and the market is skipped this run. */
 	sourceMaxDeviationBps: z.number(),
-	/** Mainnet RPC: the GLDY price is read straight from Orca's whirlpool account. */
-	mainnetRpc: z.string(),
 	goldSpotUrl: z.string(),
 	/** Orca pool price is taken while within this many bps of spot. */
 	goldMaxDeviationBps: z.number(),
@@ -140,23 +146,6 @@ const fromBase64 = (s: string): Uint8Array => {
 	return Uint8Array.from(out)
 }
 
-/** Orca whirlpool sqrt_price (u128 LE at offset 65), read on chain. */
-const whirlpoolSqrtPrice = (req: HTTPSendRequester, rpc: string, pool: string): bigint => {
-	const body = JSON.stringify({
-		jsonrpc: '2.0',
-		id: 1,
-		method: 'getAccountInfo',
-		params: [pool, { encoding: 'base64', dataSlice: { offset: 65, length: 16 } }],
-	})
-	const resp = req
-		.sendRequest({ url: rpc, method: 'POST' as const, headers: { 'Content-Type': 'application/json' }, body: new TextEncoder().encode(body) })
-		.result()
-	if (resp.statusCode !== 200) throw new Error(`rpc returned ${resp.statusCode}`)
-	const bytes = fromBase64(JSON.parse(new TextDecoder().decode(resp.body)).result.value.data[0])
-	let v = 0n
-	for (let i = 15; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i])
-	return v
-}
 
 type DsCreds = { key: string; secret: string; nowMs: number }
 
@@ -169,105 +158,122 @@ function decodeV11(hex: string): { mid: number; status: number; at: number } {
 	return { mid: Number(mid / 10n ** 10n) / 1e8, status: Number(word(blobOff, 13)), at: Number(word(blobOff, 2)) }
 }
 
+/** One signed bulk request to the Data Streams API (HMAC-SHA256 over method,
+ *  path, body hash, key and time). Returns the raw reports by feed ID. */
+const dsBulk = (req: HTTPSendRequester, config: Config, ds: DsCreds, ids: string[]): Map<string, string> => {
+	const path = `/api/v1/reports/bulk?feedIDs=${ids.join(',')}&timestamp=${Math.floor(ds.nowMs / 1000) - 2}`
+	const toSign = `GET ${path} ${bytesToHex(sha256(new Uint8Array()))} ${ds.key} ${ds.nowMs}`
+	const signature = bytesToHex(hmac(sha256, enc(ds.secret), enc(toSign)))
+	const resp = req
+		.sendRequest({
+			url: config.dataStreamsUrl + path,
+			method: 'GET' as const,
+			headers: { Authorization: ds.key, 'X-Authorization-Timestamp': String(ds.nowMs), 'X-Authorization-Signature-SHA256': signature },
+		})
+		.result()
+	const out = new Map<string, string>()
+	if (resp.statusCode !== 200) return out // e.g. 401: these feeds are not on our plan yet
+	for (const r of JSON.parse(new TextDecoder().decode(resp.body)).reports ?? []) out.set(String(r.feedID).toLowerCase(), r.fullReport)
+	return out
+}
+
 const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observation => {
 	const out: Observation = {}
-	const xs = config.markets.filter((m) => m.kind === 'xstock')
 	const golds = config.markets.filter((m) => m.kind === 'gold')
+	const tokens = config.markets // every market tracks a Solana token: xStocks and XAUt0
 	for (const m of config.markets) {
-		out[`${m.symbol}_a`] = 0
-		out[`${m.symbol}_b`] = 0
-		out[`${m.symbol}_t`] = 0
-		out[`${m.symbol}_d`] = 0
+		out[`${m.symbol}_a`] = 0 // the token on Jupiter
+		out[`${m.symbol}_b`] = 0 // the share (xStocks) or gold spot (gold)
+		out[`${m.symbol}_t`] = 0 // the share's print time
+		out[`${m.symbol}_d`] = 0 // the token's deepest DEX pair
 		out[`${m.symbol}_g`] = 0 // gold spot publish time
-		out[`${m.symbol}_s`] = 0 // Data Streams mid for the session that is live
+		out[`${m.symbol}_s`] = 0 // Data Streams price for the session that is live
 		out[`${m.symbol}_ss`] = 0 // its market status (2 regular, 1 pre, 3 post, 4 overnight)
 		out[`${m.symbol}_st`] = 0 // its observation time
 	}
-	// Chainlink Data Streams first: every share's regular, extended and
-	// overnight stream in one signed request (HMAC-SHA256 over method, path,
-	// body hash, key and time, as the API wants).
+	// Chainlink Data Streams first. The shares and gold go in separate requests:
+	// a feed the credentials do not cover makes the whole request 401.
 	const streamed = config.markets.flatMap((m) => (m.kind === 'xstock' && m.streams ? [m] : []))
 	if (streamed.length && ds.key) {
 		try {
 			const ids = streamed.flatMap((m) => [m.streams!.regular, m.streams!.extended, m.streams!.overnight])
-			const path = `/api/v1/reports/bulk?feedIDs=${ids.join(',')}&timestamp=${Math.floor(ds.nowMs / 1000) - 2}`
-			const toSign = `GET ${path} ${bytesToHex(sha256(new Uint8Array()))} ${ds.key} ${ds.nowMs}`
-			const signature = bytesToHex(hmac(sha256, enc(ds.secret), enc(toSign)))
-			const resp = req
-				.sendRequest({
-					url: config.dataStreamsUrl + path,
-					method: 'GET' as const,
-					headers: { Authorization: ds.key, 'X-Authorization-Timestamp': String(ds.nowMs), 'X-Authorization-Signature-SHA256': signature },
-				})
-				.result()
-			if (resp.statusCode === 200) {
-				const byId = new Map<string, { mid: number; status: number; at: number }>()
-				for (const r of JSON.parse(new TextDecoder().decode(resp.body)).reports ?? []) byId.set(String(r.feedID).toLowerCase(), decodeV11(r.fullReport))
-				for (const m of streamed) {
-					const reg = byId.get(m.streams!.regular.toLowerCase())
-					const ext = byId.get(m.streams!.extended.toLowerCase())
-					const ovn = byId.get(m.streams!.overnight.toLowerCase())
-					// marketStatus says which session is live; never the timestamps.
-					const live = reg && reg.status === 2 ? reg : ext && (ext.status === 1 || ext.status === 3) ? ext : ovn && ovn.status === 4 ? ovn : undefined
-					if (live && live.mid > 0) {
-						out[`${m.symbol}_s`] = live.mid
-						out[`${m.symbol}_ss`] = live.status
-						out[`${m.symbol}_st`] = live.at
-					}
+			const byId = dsBulk(req, config, ds, ids)
+			for (const m of streamed) {
+				const dec = (id: string) => (byId.has(id.toLowerCase()) ? decodeV11(byId.get(id.toLowerCase())!) : undefined)
+				const reg = dec(m.streams!.regular)
+				const ext = dec(m.streams!.extended)
+				const ovn = dec(m.streams!.overnight)
+				// marketStatus says which session is live; never the timestamps.
+				const live = reg && reg.status === 2 ? reg : ext && (ext.status === 1 || ext.status === 3) ? ext : ovn && ovn.status === 4 ? ovn : undefined
+				if (live && live.mid > 0) {
+					out[`${m.symbol}_s`] = live.mid
+					out[`${m.symbol}_ss`] = live.status
+					out[`${m.symbol}_st`] = live.at
+				}
+			}
+		} catch {}
+	}
+	const goldStreamed = golds.flatMap((m) => (m.kind === 'gold' && m.streams ? [m] : []))
+	if (goldStreamed.length && ds.key) {
+		try {
+			const byId = dsBulk(req, config, ds, goldStreamed.flatMap((m) => [m.streams!.xau, m.streams!.usdt]))
+			for (const m of goldStreamed) {
+				const xau = byId.get(m.streams!.xau.toLowerCase())
+				const usdt = byId.get(m.streams!.usdt.toLowerCase())
+				if (!xau || !usdt) continue
+				// v3 reports: benchmarkPrice sits where v11 has mid.
+				const x = decodeV11(xau)
+				const u = decodeV11(usdt)
+				if (x.mid > 0 && u.mid > 0) {
+					out[`${m.symbol}_s`] = x.mid * u.mid
+					out[`${m.symbol}_st`] = Math.min(x.at, u.at)
 				}
 			}
 		} catch {}
 	}
 	// Each source on its own: one failing must not take the others down.
-	if (xs.length) {
-		try {
-			const body = get(req, `${config.jupiterUrl}?ids=${xs.map((m) => m.mint).join(',')}`)
-			for (const m of xs) {
-				const q = body[m.mint]
-				if (!q) continue
-				out[`${m.symbol}_a`] = Number(q.usdPrice) || 0 // the token, 24/7
+	try {
+		const body = get(req, `${config.jupiterUrl}?ids=${tokens.map((m) => m.mint).join(',')}`)
+		for (const m of tokens) {
+			const q = body[m.mint]
+			if (!q) continue
+			out[`${m.symbol}_a`] = Number(q.usdPrice) || 0 // the token, 24/7
+			if (m.kind === 'xstock') {
 				out[`${m.symbol}_b`] = Number(q.stockData?.price) || 0 // the share
 				out[`${m.symbol}_t`] = q.stockData?.updatedAt ? Math.floor(Date.parse(q.stockData.updatedAt) / 1000) : 0
 			}
-		} catch {}
-	}
-	if (xs.length) {
-		try {
-			// The deepest USDC pair per token, from DexScreener (no API key).
-			const pairs = get(req, `${config.dexscreenerUrl}/${xs.map((m) => m.mint).join(',')}`) as any[]
-			for (const m of xs) {
-				let best = 0
-				let liq = 0
-				for (const p of pairs) {
-					if (p.baseToken?.address !== m.mint || p.quoteToken?.symbol !== 'USDC') continue
-					const l = Number(p.liquidity?.usd) || 0
-					if (l > liq) {
-						liq = l
-						best = Number(p.priceUsd) || 0
-					}
+		}
+	} catch {}
+	try {
+		// The deepest pair per token from DexScreener (no API key): a USDC pair
+		// when there is one, otherwise any pair, priced in USD by DexScreener
+		// (XAUt0's liquidity sits against GLDx on Raydium).
+		const pairs = get(req, `${config.dexscreenerUrl}/${tokens.map((m) => m.mint).join(',')}`) as any[]
+		for (const m of tokens) {
+			let best = 0
+			let liq = -1
+			let usdc = false
+			for (const p of pairs) {
+				if (p.baseToken?.address !== m.mint) continue
+				const isUsdc = p.quoteToken?.symbol === 'USDC'
+				const l = Number(p.liquidity?.usd) || 0
+				if ((isUsdc && !usdc) || (isUsdc === usdc && l > liq)) {
+					usdc = isUsdc
+					liq = l
+					best = Number(p.priceUsd) || 0
 				}
-				out[`${m.symbol}_d`] = best
 			}
-		} catch {}
-	}
+			out[`${m.symbol}_d`] = best
+		}
+	} catch {}
 	if (golds.length) {
-		let spot = 0
-		let spotTime = 0
 		try {
 			const g = get(req, config.goldSpotUrl)
-			spot = Number(g.price) || 0
-			spotTime = g.updatedAt ? Math.floor(Date.parse(g.updatedAt) / 1000) : 0
+			for (const m of golds) {
+				out[`${m.symbol}_b`] = Number(g.price) || 0 // gold spot, per ounce
+				out[`${m.symbol}_g`] = g.updatedAt ? Math.floor(Date.parse(g.updatedAt) / 1000) : 0
+			}
 		} catch {}
-		for (const m of golds) {
-			out[`${m.symbol}_b`] = spot // gold spot, per ounce
-			out[`${m.symbol}_g`] = spotTime
-			try {
-				// tokenA = USDC (6 decimals), tokenB = GLDY (9): sqrt_price is Q64.64 of raw B per raw A.
-				const sqrt = Number(whirlpoolSqrtPrice(req, config.mainnetRpc, m.orcaPool)) / 2 ** 64
-				const gldyPerUsdc = sqrt * sqrt * 10 ** (6 - 9)
-				out[`${m.symbol}_a`] = gldyPerUsdc > 0 ? 1 / gldyPerUsdc : 0
-			} catch {}
-		}
 	}
 	for (const m of config.markets) for (const k of ['a', 'b', 'd', 's']) out[`${m.symbol}_${k}_ok`] = out[`${m.symbol}_${k}`] > 0 ? 1 : 0
 	return out
@@ -326,11 +332,23 @@ function decide(config: Config, obs: Observation, now: Date, skipped: string[]):
 				out.push({ symbol: m.symbol, price: b, open: true, source: `share, token ${tokenSource}`, at: Math.min(nowS, obs[`${m.symbol}_t`]) })
 			else out.push({ symbol: m.symbol, price: token, open: false, source: `token, ${tokenSource}`, at: nowS })
 		} else {
+			// Gold: XAUt0 on Jupiter and its deepest DEX pair must agree; Data
+			// Streams (XAU/USDT x USDT/USD) lead when available and agreeing;
+			// gold spot is the guard and the last resort.
 			const open = goldOpen(now)
-			const near = a > 0 && b > 0 && Math.abs(a / b - 1) * 10_000 <= config.goldMaxDeviationBps
+			const d = seen(`${m.symbol}_d`) ? obs[`${m.symbol}_d`] : 0
+			const sp = seen(`${m.symbol}_s`) ? obs[`${m.symbol}_s`] : 0
+			const band = config.goldMaxDeviationBps
+			const near = (x: number, y: number) => x > 0 && y > 0 && Math.abs(x / y - 1) * 10_000 <= band
+			const token = a > 0 && d > 0 ? (near(a, d) ? (a + d) / 2 : 0) : a > 0 ? a : d
 			const spotAt = obs[`${m.symbol}_g`] > 0 ? Math.min(nowS, obs[`${m.symbol}_g`]) : nowS
-			if (near) out.push({ symbol: m.symbol, price: a, open, source: 'Orca pool', at: nowS })
-			else if (b > 0 && nowS - spotAt < config.shareMaxAge) out.push({ symbol: m.symbol, price: b, open, source: 'gold spot', at: spotAt })
+			const spotFresh = b > 0 && nowS - spotAt < config.shareMaxAge
+			if (sp > 0 && (near(sp, token) || near(sp, b)))
+				out.push({ symbol: m.symbol, price: sp, open, source: 'Data Streams XAU/USD', at: Math.min(nowS, Math.round(obs[`${m.symbol}_st`])) })
+			else if (token > 0 && (!spotFresh || near(token, b)))
+				out.push({ symbol: m.symbol, price: token, open, source: a > 0 && d > 0 ? 'XAUt0, Jupiter + DEX' : 'XAUt0, one source', at: nowS })
+			else if (spotFresh) out.push({ symbol: m.symbol, price: b, open, source: 'gold spot', at: spotAt })
+			else skipped.push(`${m.symbol}: no gold source agrees`)
 		}
 	}
 	return out

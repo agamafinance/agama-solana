@@ -51,8 +51,8 @@ export interface Stock {
   custody: PublicKey;
 }
 
-/// The xStocks keep their `x` ticker; GLDY is Streamex's gold-backed token,
-/// about one ounce each, priced off Orca's GLDY/USDC pool.
+/// The xStocks keep their `x` ticker; XAU tracks XAUt0, Tether Gold on Solana,
+/// one ounce per token.
 export const STOCKS: Stock[] = [
   ['TSLA', 'Tesla'],
   ['NVDA', 'NVIDIA'],
@@ -63,7 +63,7 @@ export const STOCKS: Stock[] = [
   ['MSFT', 'Microsoft'],
   ['AMZN', 'Amazon'],
   ['META', 'Meta'],
-  ['GLDY', 'Gold, Streamex', 'GLDY'],
+  ['XAU', 'Gold, Tether', 'XAUt0'],
 ].map(([symbol, name, ticker]) => {
   const stockMint = pda(enc('stock.v2'), symbolBytes(symbol));
   const market = pda(enc('market.v2'), stockMint.toBytes());
