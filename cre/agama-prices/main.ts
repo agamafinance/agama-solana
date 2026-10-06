@@ -11,7 +11,7 @@
 // The DON agrees on the median of every field, decides on its own clock whether
 // each market is in session, and writes signed reports to the Agama program's
 // `on_report` through the Keystone Forwarder, three markets per report (a
-// Solana transaction leaves the forwarder ~265 bytes once accounts are paid).
+// Solana write leaves ~265 bytes before its accounts), one group per run.
 //
 // The program applies the same bounds whoever brings a price: publish time
 // only forward, at most 15% per update, and borrowing waits on a stale one.
@@ -318,25 +318,15 @@ const onCron = (runtime: Runtime<Config>) => {
 	if (4 + 25 * n > 265 - 32 * (2 + n) - (2 + n)) throw new Error(`marketsPerReport ${n} does not fit a Solana report`)
 	const sigs: string[] = []
 
-	// A heartbeat first: an empty report. It stamps `cre.last_report_at` but
-	// not `last_price_at` (only an applied price does), so it cannot pass for
-	// liveness. It is there because, through the simulator on devnet, the
-	// first write of a run went out late and did not land three runs in a row:
-	// a workaround for the simulator, said as such.
-	const beat = agama.writeReportFromPriceReport(
-		runtime,
-		{ updates: [] },
-		[
-			solanaAccountMeta(sol.forwarderState, true),
-			solanaAccountMeta(authority.toBase58()),
-			solanaAccountMeta(cre.toBase58(), true),
-			solanaAccountMeta(SYSVAR_INSTRUCTIONS),
-		],
-		{ computeLimit: 100_000 },
-	)
-	runtime.log(`heartbeat ${beat.txStatus === SolanaTxStatus.SUCCESS ? 'ok' : `missed: ${String(beat.errorMessage).slice(0, 80)}`}`)
-	for (let i = 0; i < decided.length; i += config.marketsPerReport) {
-		const group = decided.slice(i, i + config.marketsPerReport)
+	// One report per run, the groups taking turns (minute by minute, the same
+	// on every node). Several writes in one run hit the public devnet RPC's
+	// connection limit while the simulator polls the first one's confirmation;
+	// with 3 markets per report and 10 markets, each is refreshed every 4 min,
+	// well inside the 10 min the program allows.
+	const groups = Math.ceil(decided.length / n)
+	const turn = Math.floor(now.getTime() / 60_000) % Math.max(groups, 1)
+	for (let i = turn * n; i < Math.min(decided.length, (turn + 1) * n); i += n) {
+		const group = decided.slice(i, i + n)
 		const updates: PriceUpdate[] = group.map((d) => ({
 			symbol: Array.from(symbolBytes(d.symbol)),
 			priceE8: BigInt(Math.round(d.price * 1e8)),

@@ -8,7 +8,6 @@ import {
   SystemProgram,
   type TransactionInstruction,
 } from '@solana/web3.js';
-import { Transaction as LegacyTx } from '@solana/web3.js';
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID as TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 import idlJson from './idl.json';
@@ -16,7 +15,8 @@ import {
   ata, BPS, crePda, lpMint, poolUsdc, positionPda, protocolPda, RPC, STOCKS, usdcMint, VALUE_SCALE, vaultUsdc, WAD, YEAR,
   type Kind, type Stock,
 } from './config';
-import { sendIxs, type SolanaProvider } from './wallet';
+import { runBatch } from './batch';
+import type { SolanaProvider } from './wallet';
 
 const idl = idlJson as Idl;
 export const connection = new Connection(RPC, 'confirmed');
@@ -96,8 +96,10 @@ export interface Position {
 }
 
 export interface Snapshot {
+  /** The wallet this snapshot was read for. */
+  owner?: string;
   /** The Chainlink CRE receiver, if configured. */
-  cre?: { simulation: boolean; reports: number; lastReportAt: number };
+  cre?: { simulation: boolean; reports: number; lastPriceAt: number };
   protocol: Protocol;
   markets: Market[];
   earn: (Position | undefined)[];
@@ -244,26 +246,36 @@ export async function readSnapshot(owner?: PublicKey): Promise<Snapshot> {
   if (!infos[0]) throw new Error('Protocol not initialised on this cluster');
   const protocol = accrue(decodeProtocol(infos[0].data, mintSupply(infos[1]?.data)), now);
   const o = 2 + STOCKS.length;
-  const markets = STOCKS.map((s, i) =>
-    decodeMarket(s, infos[2 + i]!.data, owner ? tokenAmount(infos[o + 2 + i]?.data) : 0n, now),
+  const base = o + 2 + STOCKS.length;
+  // A market the cluster does not have (yet) is left out rather than taking
+  // the whole page down; markets, earn and amplify stay index-aligned.
+  const present = STOCKS.map((_, i) => i).filter((i) => !!infos[2 + i]);
+  const markets = present.map((i) =>
+    decodeMarket(STOCKS[i], infos[2 + i]!.data, owner ? tokenAmount(infos[o + 2 + i]?.data) : 0n, now),
   );
   const earn: (Position | undefined)[] = [];
   const amplify: (Position | undefined)[] = [];
   if (owner) {
-    const base = o + 2 + STOCKS.length;
-    STOCKS.forEach((s, i) => {
+    present.forEach((i, j) => {
       const e = infos[base + 2 * i];
       const a = infos[base + 2 * i + 1];
-      earn.push(e ? decodePosition(keys[base + 2 * i], s, e.data, protocol, markets[i]) : undefined);
-      amplify.push(a ? decodePosition(keys[base + 2 * i + 1], s, a.data, protocol, markets[i]) : undefined);
+      earn.push(e ? decodePosition(keys[base + 2 * i], STOCKS[i], e.data, protocol, markets[j]) : undefined);
+      amplify.push(a ? decodePosition(keys[base + 2 * i + 1], STOCKS[i], a.data, protocol, markets[j]) : undefined);
     });
   }
-  // CreConfig: disc 8 | forwarder 32 | state 32 | owner 20 | simulation 1 | bump 1 | reports u64 | last i64
-  const creData = infos[keys.length - 1]?.data;
-  const cre =
-    creData && creData.length >= 110
-      ? { simulation: creData[92] === 1, reports: Number(creData.readBigUInt64LE(94)), lastReportAt: Number(creData.readBigInt64LE(102)) }
-      : undefined;
+  // The CRE receiver's config, decoded with the IDL rather than byte offsets:
+  // its layout moves with the program. Absent or undecodable, no badge.
+  let cre: Snapshot['cre'];
+  const creInfo = infos[keys.length - 1];
+  if (creInfo) {
+    try {
+      const c = decode('CreConfig', creInfo.data);
+      const lastPriceAt = Number(c.lastPriceAt ?? c.lastReportAt ?? 0);
+      cre = { simulation: !!c.simulation, reports: Number(c.reports ?? 0), lastPriceAt };
+    } catch {
+      cre = undefined;
+    }
+  }
   return {
     protocol,
     markets,
@@ -274,10 +286,13 @@ export async function readSnapshot(owner?: PublicKey): Promise<Snapshot> {
     lp: owner ? tokenAmount(infos[o + 1]?.data) : 0n,
     sol: sol / 1e9,
     at: now,
+    owner: owner?.toBase58(),
   };
 }
 
-/// The snapshot, refreshed every 15 s and on demand after a transaction.
+/// The snapshot, every 15 s and on demand after a transaction. While the RPC
+/// fails, the last good snapshot stays on screen with its age, and the reads
+/// back off (up to 2 min) instead of hammering a struggling endpoint.
 export function useSnapshot(owner: PublicKey | undefined) {
   const [snap, setSnap] = useState<Snapshot>();
   const [error, setError] = useState('');
@@ -287,20 +302,33 @@ export function useSnapshot(owner: PublicKey | undefined) {
 
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      readSnapshot(owner)
-        .then((s) => alive && (setSnap(s), setError('')))
-        .catch((e) => alive && setError(errorText(e)));
+    let wait = 15_000;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      try {
+        const s = await readSnapshot(owner);
+        if (!alive) return;
+        setSnap(s);
+        setError('');
+        wait = 15_000;
+      } catch (e) {
+        if (!alive) return;
+        setError(errorText(e));
+        wait = Math.min(wait * 2, 120_000);
+      }
+      if (alive) timer = setTimeout(load, wait);
+    };
     load();
-    const id = setInterval(load, 15_000);
     return () => {
       alive = false;
-      clearInterval(id);
+      clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, tick]);
 
-  return { snap, error, refresh };
+  // A snapshot from another wallet is not this wallet's.
+  const mine = snap && snap.owner === key ? snap : owner ? undefined : snap;
+  return { snap: mine, error, refresh };
 }
 
 // ---------------------------------------------------------------------------
@@ -399,77 +427,17 @@ export const ix = {
         ...sys,
       })
       .instruction() as Promise<TransactionInstruction>,
-  lend: (user: PublicKey, kind: 'supply' | 'withdraw', amount: bigint) =>
-    m[kind](new BN(amount.toString()))
-      .accountsPartial({
-        user,
-        protocol: protocolPda,
-        usdcMint,
-        lpMint,
-        poolUsdc,
-        userUsdc: ata(user, usdcMint),
-        userLp: ata(user, lpMint),
-        ...sys,
-      })
-      .instruction() as Promise<TransactionInstruction>,
 };
 
-/// Sign with the wallet, send to devnet, wait for confirmation by polling.
-/// Polling rather than a websocket subscription, which some RPC fronts drop,
-/// and the same signed bytes re-sent every 2 s, since devnet RPCs drop
-/// transactions under load. Never re-signed: the wallet is asked once.
-export async function send(
-  provider: SolanaProvider,
-  payer: PublicKey,
-  ixs: TransactionInstruction[],
-): Promise<string> {
-  const { sig, raw, lastValidBlockHeight } = await sendIxs(provider, connection, payer, ixs);
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const { value } = await connection.getSignatureStatuses([sig], { searchTransactionHistory: true });
-    const st = value[0];
-    if (st?.err) throw new Error(`Transaction failed: ${JSON.stringify(st.err)}`);
-    if (st?.confirmationStatus === 'confirmed' || st?.confirmationStatus === 'finalized') return sig;
-    if ((await connection.getBlockHeight('confirmed')) > lastValidBlockHeight) {
-      throw new Error(`Expired before landing, nothing was spent: ${sig}`);
-    }
-    await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
-  }
+/// Sign with the wallet and see it confirmed, through the same batch engine
+/// as everything else (re-send, retries, honest partial failures).
+export async function send(provider: SolanaProvider, payer: PublicKey, ixs: TransactionInstruction[]): Promise<string> {
+  return (await runBatch(provider, connection, payer, [{ ixs }]))[0];
 }
 
-/// Several transactions approved once (`signAllTransactions` when the wallet
-/// has it), then sent in order with the same re-send as `send`.
-export async function sendBatch(
-  provider: SolanaProvider,
-  payer: PublicKey,
-  groups: TransactionInstruction[][],
-): Promise<string[]> {
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-  const txs = groups.map((ixs) => {
-    const tx = new LegacyTx({ feePayer: payer, blockhash, lastValidBlockHeight }).add(...ixs);
-    return tx;
-  });
-  const signed: LegacyTx[] =
-    typeof provider.signAllTransactions === 'function'
-      ? await provider.signAllTransactions(txs)
-      : await Promise.all(txs.map((t) => provider.signTransaction!(t)));
-  const sigs: string[] = [];
-  for (const t of signed) {
-    const raw = t.serialize();
-    const sig = await connection.sendRawTransaction(raw, { preflightCommitment: 'confirmed', maxRetries: 0 });
-    for (;;) {
-      await new Promise((r) => setTimeout(r, 2000));
-      const st = (await connection.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
-      if (st?.err) throw new Error(`Transaction failed: ${JSON.stringify(st.err)}`);
-      if (st?.confirmationStatus === 'confirmed' || st?.confirmationStatus === 'finalized') break;
-      if ((await connection.getBlockHeight('confirmed')) > lastValidBlockHeight) {
-        throw new Error(`Expired before landing, nothing was spent: ${sig}`);
-      }
-      await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
-    }
-    sigs.push(sig);
-  }
-  return sigs;
+/// Several transactions, one approval, sent in order.
+export async function sendBatch(provider: SolanaProvider, payer: PublicKey, groups: TransactionInstruction[][]): Promise<string[]> {
+  return runBatch(provider, connection, payer, groups.map((ixs) => ({ ixs })));
 }
 
 /// The program's own error name when there is one, the wallet's message
@@ -481,7 +449,7 @@ export function errorText(e: unknown): string {
   if (anchor) return anchor[1];
   if (/User rejected|rejected the request/i.test(msg)) return 'Cancelled in the wallet';
   if (/insufficient (funds|lamports)|0x1\b/i.test(msg)) return 'Not enough SOL for the fee. Devnet SOL: faucet.solana.com';
-  return msg.split('\n')[0].slice(0, 200);
+  return msg.split('\n')[0].slice(0, 320);
 }
 
 export function ago(at: number): string {

@@ -4,8 +4,7 @@
 #
 #   VALIDATOR=/path/to/agave-4.3/bin/solana-test-validator \
 #   PLAYWRIGHT_PATH=/path/to/node_modules/playwright CHROME_PATH=/path/to/chromium \
-#   ./web/scripts/ui-e2e-local.sh                 # private path
-#   E2E_ENV=PRIVATE=0 ./web/scripts/ui-e2e-local.sh   # standard path
+#   ./web/scripts/ui-e2e-local.sh
 #
 # agave 4.3+ because 3.1 rejects the zk-sdk proofs; Token-2022 is cloned from
 # devnet because the genesis copy predates the confidential instruction layout.
@@ -36,5 +35,5 @@ NEXT_PUBLIC_SOLANA_RPC=http://127.0.0.1:8899 pnpm build 2>&1 | tail -2
 ./node_modules/.bin/next start -p 3032 >/tmp/agama-web-3032.log 2>&1 &
 W=$!
 until curl -s -o /dev/null http://127.0.0.1:3032/solana; do sleep 1; done
-echo "== ui e2e (${E2E_ENV:-PRIVATE=1})"
-env ${E2E_ENV:-PRIVATE=1} FUND_SOL=2 node scripts/ui-e2e.mjs http://127.0.0.1:3032 2>&1 | grep -v "punycode\|trace-deprecation"
+echo "== ui e2e"
+SOLANA_RPC=http://127.0.0.1:8899 FUND_SOL=0.1 node scripts/ui-e2e.mjs http://127.0.0.1:3032 2>&1 | grep -v "punycode\|trace-deprecation"

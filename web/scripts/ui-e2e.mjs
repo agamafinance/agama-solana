@@ -4,11 +4,14 @@
 //
 // A headless Chromium opens the app with an injected wallet (window.solana)
 // whose signTransaction is a throwaway Keypair held by this script, funded
-// with 0.03 SOL from ~/.config/solana/id.json. Every click is a real devnet
-// transaction. Flow: faucet, Earn open, move the slider, Amplify open and
-// close, Lend supply and withdraw, Earn close, with a look at every tab.
-// Screenshots land in /tmp/agama-solana-*.png. Fails on any page error or any
-// error the app writes under a button.
+// with at most 0.1 SOL from ~/.config/solana/id.json and swept back at the
+// end. Every click is a real devnet transaction. Flow, private by default:
+// faucet into the private balance, Earn from private, the slider, close back
+// to private, Amplify open and close, Portfolio. Every balance is checked from
+// outside with the wallet's own confidential keys. Screenshots land in
+// /tmp/agama-solana-*.png. Fails on any page error or any error the app
+// writes under a button. Refuses to run on anything but devnet or a local
+// validator.
 //
 // Needs `playwright` resolvable (PLAYWRIGHT_PATH) and a cached Chromium
 // (CHROME_PATH), since this app does not depend on either.
@@ -22,7 +25,7 @@ import nacl from 'tweetnacl';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_PATH ?? 'playwright');
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:3031').replace(/\/$/, '');
-const RPC = process.env.SOLANA_RPC ?? 'https://rpc.magicblock.app/devnet';
+const RPC = process.env.SOLANA_RPC ?? 'https://api.devnet.solana.com';
 const conn = new Connection(RPC, 'confirmed');
 const funder = Keypair.fromSecretKey(
   Uint8Array.from(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.config/solana/id.json'), 'utf8'))),
@@ -30,8 +33,8 @@ const funder = Keypair.fromSecretKey(
 const user = Keypair.generate();
 
 // ---------------------------------------------------------------------------
-// The private run (PRIVATE=1): a second wallet configured from here, the rest
-// clicked in the app.
+// Confidential helpers: derive the wallet's keys from outside the app, to
+// check the balances it shows.
 // ---------------------------------------------------------------------------
 import {
   createKeyPairSignerFromBytes, createSolanaRpc, createTransactionMessage, createTransactionPlanExecutor,
@@ -114,10 +117,15 @@ async function sweep(kp) {
 }
 
 async function main() {
+  // Never on mainnet: devnet's genesis, or a local validator.
+  const genesis = await conn.getGenesisHash();
+  if (genesis !== 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG' && !/127\.0\.0\.1|localhost/.test(RPC)) {
+    throw new Error(`not devnet (genesis ${genesis})`);
+  }
   await sendAndConfirmTransaction(
     conn,
     new Transaction().add(
-      SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: user.publicKey, lamports: Number(process.env.FUND_SOL ?? 0.03) * LAMPORTS_PER_SOL }),
+      SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: user.publicKey, lamports: Math.min(Number(process.env.FUND_SOL ?? 0.08), 0.1) * LAMPORTS_PER_SOL }),
     ),
     [funder],
   );
@@ -204,128 +212,69 @@ async function main() {
   await page.getByRole('button', { name: 'Injected wallet' }).click();
   await page.getByText(pk.slice(0, 4)).first().waitFor();
 
+  // The same keys the app derives, to check every balance from outside.
+  const me = await recipientKeys(user);
+  const SPY_MINT = pdaOf('stock.v2', sym8('SPY'));
+  const expect = async (what, mint, pub, priv) => {
+    const b = await privateOf(me, mint);
+    const ok = (pub === undefined || b.public === pub) && (priv === undefined || b.private === priv);
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}: public ${b.public}, private ${b.private}`);
+    if (!ok) throw new Error(`${what}: expected public ${pub} private ${priv}`);
+    return b;
+  };
+
+  // 1. Faucet: minted straight into the private balance.
   await nav('Faucet');
-  await page.getByRole('button', { name: 'Mint test tokens' }).click();
+  await page.getByRole('button', { name: 'Mint test tokens, privately' }).click();
   await settle('faucet');
   await shot('faucet');
+  await expect('faucet TSLAx', TSLA_MINT, 0n, 10n * 10n ** 8n);
+  await expect('faucet USDC', USDC_MINT, 0n, 10_000n * 10n ** 6n);
 
-  if (process.env.PRIVATE === '1') {
-    const bob = Keypair.generate();
-    await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: bob.publicKey, lamports: 0.02 * LAMPORTS_PER_SOL })), [funder]);
-    const bobKeys = await recipientKeys(bob);
-    await configureRecipient(bobKeys, [TSLA_MINT]);
-    console.log('recipient', bob.publicKey.toBase58(), 'configured for TSLAx');
-
-    const cell = (k) => page.getByTestId(`private-${k}`).innerText();
-    const row = (k) => page.getByTestId(`row-${k}`).click();
-    await nav('Private');
-    await page.getByRole('button', { name: 'Unlock private balances' }).waitFor();
-    await shot('private-locked');
-    await page.getByRole('button', { name: 'Unlock private balances' }).click();
-    await page.waitForFunction(() => !document.body.innerText.includes('Locked'), null, { timeout: 30_000 });
-
-    await row('USDC');
-    await page.getByLabel('Private amount').fill('10000');
-    await page.getByRole('button', { name: 'Shield USDC' }).click();
-    await settle('shield USDC');
-    await row('TSLA');
-    await page.getByLabel('Private amount').fill('10');
-    await page.getByRole('button', { name: 'Shield TSLAx' }).click();
-    await settle('shield TSLAx');
-    await page.waitForFunction(() => document.querySelector('[data-testid="private-TSLA"]')?.innerText.startsWith('10'), null, { timeout: 30_000 });
-    await shot('private-shielded');
-
-    await page.getByRole('button', { name: 'Send privately', exact: true }).click();
-    await page.getByLabel('Private amount').fill('2');
-    await page.getByLabel('Recipient').fill(bob.publicKey.toBase58());
-    await page.getByRole('button', { name: 'Send privately TSLAx' }).click();
-    await settle('private send');
-    const bobTsla = await privateOf(bobKeys, TSLA_MINT);
-    if (bobTsla.private !== 200_000_000n || bobTsla.public !== 0n) throw new Error(`recipient got ${bobTsla.private} private, ${bobTsla.public} public`);
-    console.log('recipient decrypts 2 TSLAx, public 0');
-
-    await nav('Earn');
-    await page.waitForFunction(() => document.body.innerText.includes('private'), null, { timeout: 30_000 });
-    await page.getByPlaceholder('0.00').fill('5');
-    await page.getByRole('button', { name: 'Unshield and deposit' }).click();
-    await settle('unshield + earn');
-    await page.getByText('Agents running').waitFor({ timeout: 30_000 });
-    await shot('private-earn');
-    await page.getByLabel('Return it to my private balance').waitFor();
-    await page.getByRole('button', { name: 'Close, get the stock back' }).click();
-    await settle('close + shield back');
-
-    await nav('Lend');
-    await page.waitForFunction(() => /supply apr/i.test(document.body.innerText));
-    await page.waitForFunction(() => document.body.innerText.includes('private'), null, { timeout: 30_000 }).catch(() => {});
-    await page.getByPlaceholder('0.00').fill('100');
-    await page.getByRole('button', { name: 'Unshield and supply USDC' }).click();
-    await settle('unshield + supply');
-
-    await nav('Private');
-    await page.waitForFunction(() => /^[1-9]/.test(document.querySelector('[data-testid="private-LP"]')?.innerText ?? ''), null, { timeout: 45_000 });
-    await shot('private-after');
-    const tsla = await cell('TSLA');
-    const lp = await cell('LP');
-    const usdc = await cell('USDC');
-    console.log(`private now: TSLAx ${tsla}, USDC ${usdc}, LP ${lp}`);
-    if (!tsla.startsWith('8')) throw new Error(`expected 8 TSLAx private, got ${tsla}`);
-    const pubText = await page.getByTestId('balances').innerText();
-    console.log(pubText.replace(/\n/g, ' | '));
-
-    await browser.close();
-    await sweep(bob);
-    if (errors.length) throw new Error(`page errors:\n${errors.join('\n')}`);
-    console.log('PASS');
-    return;
-  }
-
+  // 2. Earn from private.
   await nav('Earn');
-  await page.waitForFunction(() => document.body.innerText.includes('held'), null, { timeout: 30_000 });
+  await page.waitForFunction(() => document.body.innerText.includes('private'), null, { timeout: 60_000 });
   await page.getByPlaceholder('0.00').fill('2');
   await page.getByRole('button', { name: 'Deposit and start earning' }).click();
   await settle('earn open');
-  await page.getByText('Agents running').waitFor({ timeout: 30_000 });
+  await page.getByText('Agents running').waitFor({ timeout: 60_000 });
   await shot('earn-position');
+  await expect('after deposit TSLAx', TSLA_MINT, 0n, 8n * 10n ** 8n);
 
+  // 3. The slider.
   await page.getByLabel('Target LTV').fill('1500');
   await page.getByRole('button', { name: /Move the target to/ }).click();
   await settle('slider');
-  await page.waitForFunction(() => /Target level\s*15(\.0)?%/.test(document.body.innerText), null, { timeout: 30_000 });
-  await shot('earn-slider');
+  await page.waitForFunction(() => /Target level\s*15(\.0)?%/.test(document.body.innerText), null, { timeout: 60_000 });
 
-  await nav('Portfolio');
-  await page.getByText('Manage').first().waitFor({ timeout: 30_000 });
-  await shot('portfolio');
-
-  await nav('Amplify');
-  await page.waitForFunction(() => /\d\.\d\dx max/.test(document.body.innerText));
-  await shot('amplify');
-  await page.getByPlaceholder('0.00').fill('2');
-  await page.getByRole('button', { name: /^Amplify \d/ }).click();
-  await settle('amplify open');
-  await page.getByText('Agents running').waitFor({ timeout: 30_000 });
-  await shot('amplify-position');
-  await page.getByRole('button', { name: 'Close, sell what repays, keep the rest' }).click();
-  await settle('amplify close');
-  await shot('amplify-closed');
-
-  await nav('Lend');
-  await page.waitForFunction(() => /supply apr/i.test(document.body.innerText));
-  await page.getByPlaceholder('0.00').fill('100');
-  await page.getByRole('button', { name: 'Supply USDC' }).click();
-  await settle('lend supply');
-  await shot('lend');
-  await page.getByRole('button', { name: 'withdraw', exact: true }).click();
-  await page.waitForFunction(() => !/Balance 0\.00 ·/.test(document.body.innerText), null, { timeout: 30_000 });
-  await page.getByRole('button', { name: /Balance .* Max/ }).click();
-  await page.getByRole('button', { name: 'Withdraw USDC' }).click();
-  await settle('lend withdraw');
-
-  await nav('Earn');
+  // 4. Close: the stock comes back private.
   await page.getByRole('button', { name: 'Close, get the stock back' }).click();
   await settle('earn close');
   await shot('earn-closed');
+  await expect('after close TSLAx', TSLA_MINT, 0n, 10n * 10n ** 8n);
+  await expect('after close USDC public', USDC_MINT, 0n, undefined);
+
+  // 5. Amplify from private, and back.
+  await nav('Amplify');
+  await page.waitForFunction(() => /\d\.\d\dx max/.test(document.body.innerText), null, { timeout: 60_000 });
+  await page.getByPlaceholder('0.00').fill('2');
+  await page.getByRole('button', { name: /^Amplify \d/ }).click();
+  await settle('amplify open');
+  await page.getByText('Agents running').waitFor({ timeout: 60_000 });
+  await shot('amplify-position');
+  await expect('after loop SPYx', SPY_MINT, 0n, 8n * 10n ** 8n);
+  await page.getByRole('button', { name: 'Close, sell what repays, keep the rest' }).click();
+  await settle('amplify close');
+  const spy = await expect('after unwind SPYx public', SPY_MINT, 0n, undefined);
+  if (spy.private < 9n * 10n ** 8n || spy.private > 10n * 10n ** 8n) throw new Error(`SPYx private ${spy.private}`);
+
+  // 6. Portfolio reads the private balances.
+  await nav('Portfolio');
+  await page.getByTestId('balances').waitFor({ timeout: 60_000 });
+  const tsla = await page.getByTestId('held-TSLA').innerText();
+  console.log('portfolio TSLAx', tsla);
+  if (!tsla.startsWith('10')) throw new Error(`portfolio shows ${tsla} TSLAx`);
+  await shot('portfolio');
 
   await browser.close();
   if (errors.length) throw new Error(`page errors:\n${errors.join('\n')}`);

@@ -6,7 +6,7 @@
   "mainnetRpc": "https://api.mainnet-beta.solana.com",
   "goldSpotUrl": "https://api.gold-api.com/price/XAU",
   "goldMaxDeviationBps": 300,
-  "shareMaxAge": 300,
+  "shareMaxAge": 120,
   "marketsPerReport": 3,
   "solana": {
     "chainSelectorName": "solana-devnet",

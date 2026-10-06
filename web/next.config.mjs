@@ -17,6 +17,9 @@ const nextConfig = {
   // does not run it a second time.
   typescript: { ignoreBuildErrors: true },
   assetPrefix,
+  // A second build can sit beside the served one (the e2e builds into its own
+  // directory while launchd keeps serving .next).
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // The Anchor repo sits one level up and has its own lockfile; pin the root
   // so Next does not walk up and pick it.
   outputFileTracingRoot: root,

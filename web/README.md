@@ -8,40 +8,62 @@ platform. Every page lives under `/solana`, so it can sit behind a path rewrite 
 |---|---|
 | `/solana` | Earn: deposit a stock, pick the level on one slider, the agents hold it |
 | `/solana/amplify` | One leverage slider, capped at 1 / (1 - LTV), open and close |
-| `/solana/lend` | Supply and withdraw USDC in the pool the positions borrow from |
-| `/solana/portfolio` | Every position of the wallet and what the agents last did |
-| `/solana/faucet` | 10,000 USDC and 10 of each stock in one transaction |
+| `/solana/portfolio` | Every position of the wallet, what the agents last did, the private balances |
+| `/solana/faucet` | 10,000 USDC and 10 of each of the ten markets' tokens, minted straight into the private balance |
 
 ```
 lib/solana/
-  config.ts          RPC, program id, PDAs, the four stocks
-  useSolana.ts       one getMultipleAccounts snapshot, client-side accrual, instructions, send
+  config.ts          RPC, program id, PDAs, the ten markets
+  useSolana.ts       one getMultipleAccounts snapshot, client-side accrual, instructions
+  batch.ts           every send: build, one approval, re-send, retries, honest partial failures
+  confidential.ts    keys, balances, shield and unshield steps (zk-sdk, loaded on first use)
+  PrivateContext.tsx private by default: the lock, unshield before, shield after
   wallet.ts          Phantom, Solflare, Backpack, or any injected window.solana
-  WalletProvider.tsx the wallet context
+  WalletProvider.tsx the wallet context, following account switches inside the wallet
   idl.json           copied from ../idl/agama_solana.json
-components/solana/   cards, rows, market picker, agents card
+components/solana/   cards, rows, market picker, agents card, privacy bar
 ```
 
-Reads are one `getMultipleAccounts` per refresh (protocol, markets, LP mint, and the wallet's eight
-possible positions and six token accounts), decoded with the IDL and accrued forward to now with the
-program's own rate model. Writes are signed with `signTransaction` and sent to devnet by the app, never
-by the wallet, which would otherwise submit to whatever cluster it is set to.
+Reads are one `getMultipleAccounts` per refresh (protocol, ten markets, LP mint, the CRE receiver, and the
+wallet's twenty possible positions and eleven token accounts), decoded with the IDL and accrued forward to
+now with the program's own rate model. While the RPC fails, the last snapshot stays on screen with its age
+and the reads back off up to two minutes. Writes are signed by the wallet and sent by the app, never by the
+wallet, which would otherwise submit to whatever cluster it is set to.
+
+## Private by default
+
+Every Agama mint is Token-2022 with confidential transfers, and a holder's tokens live in the confidential
+balance: amounts are ElGamal ciphertexts on chain that only the owner's keys read.
+
+- **Keys.** One signature over `solana-conf-bal/v1`, the message every Token-2022 client signs, asked once
+  per session and kept in memory only, cleared on Lock, on disconnect and when the wallet switches account.
+  Whoever holds that signature can read (never spend) the private amounts, which the app says where it asks.
+- **Faucet.** Mints, then shields what it minted, setting up each private balance the first time: one
+  approval, about 15 transactions the first time.
+- **Earn and Amplify.** A deposit spends any public remainder first and unshields exactly what is missing
+  (one approval, about 5 transactions: the proofs do not fit in one). A close shields exactly what came back
+  (a second approval). The program sees the amount entering or leaving, as it must to price the loan, and
+  positions are public program state.
+- **When something stops half way.** If the unshield landed but the deposit failed, or the close landed but
+  the shield did not, the page says which amount is public now and offers to shield it back in one click.
+- **One action at a time.** A confidential balance carries a client-written copy of the readable balance; two
+  actions built from the same read would write it twice. Every action takes an app-wide lock and re-reads
+  the accounts before building.
+
+## Sending
+
+`batch.ts` builds every transaction of an action, asks for one approval, sends them in order and follows
+each one: the same signed bytes are re-sent until they land, RPC errors are retried with backoff, a
+transaction is only called expired after one more status read, and if the batch outlives its blockhash the
+remaining transactions are signed again with a fresh one (one more approval) rather than abandoned. A
+transaction that fails on chain stops the batch with the step that failed and the signatures that landed.
 
 ## Honest about devnet
 
-The stocks and USDC are stand-ins minted by the program. Prices are relayed by the keeper from the live
-xStocks through Jupiter: the share price while NYSE trades, the token's own price outside it, when LTVs
-drop by the 5% off-hours buffer. Swaps settle at that price minus 5 bps.
-
-## Private balances
-
-Every Agama mint is Token-2022 with confidential transfers. The Private tab (`/solana/private`) unlocks
-the wallet's keys with one signature over `solana-conf-bal/v1` (kept in memory only), shows public and
-decrypted private balances, and shields, unshields and sends privately. Earn, Amplify and Lend can take
-what the public balance lacks out of the private one ("Unshield and deposit") and put what comes back
-into it ("Return it to my private balance"). Proofs are built in the browser with `@solana/zk-sdk` and
-every action is one wallet approval, even when it is 4 or 5 transactions. Entering or leaving the
-protocol reveals the amount; positions are public program state.
+The stocks, GLDY and USDC are stand-ins minted by the program. Prices come from a Chainlink CRE workflow
+reading the live xStocks (the share price while NYSE trades, the token's own price outside it, when LTVs
+drop by the 5% off-hours buffer) and Orca's GLDY pool; it runs through the CRE simulator and Chainlink's
+devnet mock forwarder, which the badge says. Swaps settle at the oracle price minus 5 bps.
 
 ## Run it
 
@@ -49,14 +71,11 @@ protocol reveals the amount; positions are public program state.
 pnpm install
 pnpm typecheck        # strict, over everything served (tsconfig.solana.json)
 pnpm build && pnpm start          # http://127.0.0.1:3031/solana
-NEXT_PUBLIC_SOLANA_RPC=...        # default https://rpc.magicblock.app/devnet
+NEXT_PUBLIC_SOLANA_RPC=...        # default https://api.devnet.solana.com
 NEXT_PUBLIC_ASSET_PREFIX=...      # when served behind a rewrite
 
-# A headless browser with an injected throwaway wallet: faucet, Earn open, every tab, Earn close.
-PLAYWRIGHT_PATH=/path/to/node_modules/playwright CHROME_PATH=/path/to/chromium node scripts/ui-e2e.mjs
-
-# The private run: unlock, shield, private send to a second wallet (decrypted on its side), Unshield and
-# deposit into Earn, close back into the private balance, Unshield and supply. Needs a validator whose ZK
-# ElGamal program takes the zk-sdk proofs (agave 4.3; 3.1 rejects them) and the devnet Token-2022.
-PRIVATE=1 FUND_SOL=2 SOLANA_RPC=http://127.0.0.1:8899 node scripts/ui-e2e.mjs http://127.0.0.1:3032
+# A headless browser with an injected throwaway wallet, on devnet: faucet into the private balance,
+# Earn from private, the slider, close back to private, Amplify open and close, Portfolio.
+PLAYWRIGHT_PATH=/path/to/node_modules/playwright CHROME_PATH=/path/to/chromium FUND_SOL=0.1 \
+  node scripts/ui-e2e.mjs http://127.0.0.1:3033
 ```

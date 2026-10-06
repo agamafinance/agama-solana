@@ -3,37 +3,74 @@
 import Link from 'next/link';
 
 import { TokenIcon } from '@/components/icons/TokenIcon';
-import { AGENT_OPS, BPS, explorerAddr } from '@/lib/solana/config';
+import { AGENT_OPS, BPS, explorerAddr, usdcMint } from '@/lib/solana/config';
+import { usePrivate } from '@/lib/solana/PrivateContext';
 import { useSolanaWallet } from '@/lib/solana/WalletProvider';
-import { ago, pct, qty, totalAssets, usd, useSnapshot, type Position } from '@/lib/solana/useSolana';
+import { ago, pct, qty, usd, useSnapshot, type Position } from '@/lib/solana/useSolana';
+import { PrivacyBar } from '@/components/solana/privacy';
 import { card, Hero, Panel, primaryBtn, Stat } from '@/components/solana/ui';
 
 export default function SolanaPortfolioPage() {
   const { address, connect } = useSolanaWallet();
-  const { snap } = useSnapshot(address);
+  const { snap, error } = useSnapshot(address);
+  const priv = usePrivate();
 
   const positions: Position[] = snap ? [...snap.earn, ...snap.amplify].filter((x): x is Position => !!x) : [];
-  const lpValue = snap && snap.protocol.lpSupply > 0n ? (snap.lp * totalAssets(snap.protocol)) / snap.protocol.lpSupply : 0n;
   const equity = positions.reduce((a, x) => a + x.value + x.buffer - x.debt, 0n);
-  const wallet = snap
-    ? snap.markets.reduce((a, m) => a + (m.balance * m.priceE8) / 10n ** 10n, snap.usdc)
-    : 0n;
+  // Holdings: the private balance plus any public remainder, valued at the
+  // oracle. Unknown while locked.
+  const held = (mint: Parameters<typeof priv.privateOf>[0], pub: bigint) => priv.privateOf(mint) + pub;
+  const holdings = snap
+    ? snap.markets.map((m) => {
+        const amount = held(m.stock.stockMint, m.balance);
+        return { m, amount, value: (amount * m.priceE8) / 10n ** 10n };
+      })
+    : [];
+  const usdcHeld = snap ? held(usdcMint, snap.usdc) : 0n;
+  const wallet = holdings.reduce((a, h) => a + h.value, usdcHeld);
 
   return (
     <>
       <Hero title={<>Portfolio</>}>
         <p className="mt-4 max-w-[640px] text-[15px] text-fg-muted">
-          Every position this wallet holds on Agama for Solana, and what the agents last did to each.
+          Every position this wallet holds on Agama for Solana, what the agents last did to each, and the private
+          balances only this wallet can read.
         </p>
         {address && (
           <div className="mt-7 flex flex-wrap gap-8">
             <Stat label="In positions" value={usd(equity)} sub="Stock plus vault buffer, less debt" />
-            <Stat label="Lending" value={usd(lpValue)} sub="USDC pool" />
-            <Stat label="In the wallet" value={usd(wallet)} sub="USDC and stocks at the oracle" />
+            <Stat
+              label="In the wallet, private"
+              value={priv.unlocked ? usd(wallet) : 'Locked'}
+              sub={priv.unlocked ? 'USDC, stocks and GLDY at the oracle' : 'Unlock to read your private balances'}
+            />
           </div>
         )}
       </Hero>
       <Panel>
+        <PrivacyBar />
+        {error && snap && <p className="text-[12px] text-[#b4571f]">Showing data from {ago(snap.at)}: the RPC is not answering, retrying.</p>}
+        {address && priv.unlocked && snap && (
+          <div className={card} data-testid="balances">
+            <h2 className="text-[17px] font-semibold text-fg">Private balances</h2>
+            <table className="mt-3 w-full text-[14px]">
+              <tbody>
+                <tr className="border-t border-[#254839]/10">
+                  <td className="py-2"><span className="flex items-center gap-2"><TokenIcon symbol="USDC" size={20} />USDC</span></td>
+                  <td className="py-2 text-right tabular-nums" data-testid="held-USDC">{usd(usdcHeld).replace('$', '')}</td>
+                  <td className="py-2 text-right tabular-nums text-fg-muted">{usd(usdcHeld)}</td>
+                </tr>
+                {holdings.map((h) => (
+                  <tr key={h.m.stock.symbol} className="border-t border-[#254839]/10">
+                    <td className="py-2"><span className="flex items-center gap-2"><TokenIcon symbol={h.m.stock.ticker} size={20} />{h.m.stock.ticker}</span></td>
+                    <td className="py-2 text-right tabular-nums" data-testid={`held-${h.m.stock.symbol}`}>{qty(h.amount)}</td>
+                    <td className="py-2 text-right tabular-nums text-fg-muted">{usd(h.value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {!address ? (
           <div className={`${card} max-w-[480px]`}>
             <p className="text-[14px] text-fg-muted">Connect a wallet to see its positions.</p>

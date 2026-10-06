@@ -111,7 +111,7 @@ only as a fallback anyone can run.
 ### agama-prices
 
 ```
-cron, every minute
+cron, every minute (one group of three markets per run, in turn)
   each DON node, over HTTP:
     Jupiter price API   the 9 xStocks: the token's own price and the share's
     DexScreener         the deepest USDC pair of each xStock: a second,
@@ -120,7 +120,7 @@ cron, every minute
     gold spot           a guard on that thin pool (3% band)
   consensus             median of every field across the nodes
   decision, DON clock   in session or not (NYSE hours, gold 24/5), which source
-  Solana write          a heartbeat, then one signed report per 3 markets
+  Solana write          one signed report, this minute's group of 3 markets
     -> Keystone Forwarder -> agama.on_report -> markets priced
 ```
 
@@ -160,11 +160,13 @@ cron, every minute
   bytes, less 32 per account it lists (cre, the sysvar, each market); a price
   update is 25 bytes. The workflow refuses a `marketsPerReport` that would not
   fit.
-- **The heartbeat is a simulator workaround, said as such.** Through the
-  simulator on devnet, the first write of a run went out late and did not land,
-  three runs out of three. Each run now opens with an empty report. It stamps
-  `cre.last_report_at`, never `last_price_at`: only an applied price counts as
-  liveness, and that is what the app shows.
+- **One report per run, the groups taking turns.** Through the simulator on
+  the public devnet RPC, a second write in the same run hit the RPC's
+  connection limit while the first one's confirmation was still being polled.
+  So each run writes one group of three, chosen by the minute (the same on
+  every node): each market is refreshed every four minutes, inside the ten the
+  program allows. `cre.last_price_at` only moves when a price applies, and is
+  the liveness the app shows.
 - **Where it runs today.** The organisation is still gated for CRE deploys, so
   the workflow runs through the CRE simulator (`cre/run-devnet.sh`, every
   minute under launchd), which executes the same WASM, does the same HTTP and

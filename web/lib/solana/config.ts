@@ -5,7 +5,10 @@ import idl from './idl.json';
 
 /// The public devnet RPC rate-limits hard enough to break a page that reads a
 /// dozen accounts on mount. MagicBlock's devnet endpoint fronts the same cluster.
-export const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://rpc.magicblock.app/devnet';
+/// Solana's own devnet endpoint. magicblock's devnet RPC failed the private
+/// flow's sends in preflight with no logs (they simulate fine) and answered
+/// 503 under load; this one passed the full UI e2e. 429s are retried by batch.ts.
+export const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.devnet.solana.com';
 export const PROGRAM_ID = new PublicKey(idl.address);
 export const asset = (path: string) => `${process.env.NEXT_PUBLIC_ASSET_PREFIX ?? ''}${path}`;
 export const explorerTx = (sig: string) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
@@ -26,7 +29,7 @@ const pda = (...seeds: Uint8Array[]) => PublicKey.findProgramAddressSync(seeds, 
 
 export const protocolPda = pda(enc('protocol.v2'));
 /// Where the Chainlink CRE receiver keeps its forwarder and report count.
-export const crePda = pda(enc('cre.v2'));
+export const crePda = pda(enc('cre.v3'));
 export const usdcMint = pda(enc('usdc.v2'));
 export const lpMint = pda(enc('lp.v2'));
 export const poolUsdc = pda(enc('pool_usdc.v2'));

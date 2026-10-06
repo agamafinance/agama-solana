@@ -3,22 +3,21 @@
 import { useEffect, useState } from 'react';
 
 import { asset, AGENT_OPS, BPS, STOCK_DECIMALS, usdcMint } from '@/lib/solana/config';
-import { usePrivate } from '@/lib/solana/PrivateContext';
-import { FromPrivateNote, ReturnPrivately } from '@/components/solana/private';
+import { usePrivate, type PublicLeft } from '@/lib/solana/PrivateContext';
+import { ActionStatus, PrivacyBar, statusFromError } from '@/components/solana/privacy';
 import { useSolanaWallet } from '@/lib/solana/WalletProvider';
 import {
-  ago, borrowRateBps, errorText, ix, pct, px, qty, send, stockValue, usd, useSnapshot,
+  ago, borrowRateBps, ix, pct, px, qty, stockValue, usd, useSnapshot,
 } from '@/lib/solana/useSolana';
 import {
   AgentsCard, AmountBox, card, Hero, CreBadge, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
-  Stat, Status, toDecimal,
+  Stat, toDecimal,
 } from '@/components/solana/ui';
 
 export default function SolanaEarnPage() {
   const { address, provider, connect } = useSolanaWallet();
   const { snap, error, refresh } = useSnapshot(address);
   const priv = usePrivate();
-  const [backPrivate, setBackPrivate] = useState(true);
   const [sel, setSel] = useState(0);
   const m = snap?.markets[sel];
   const position = snap?.earn[sel];
@@ -28,8 +27,8 @@ export default function SolanaEarnPage() {
   // The slider is in bps of LTV. Undefined until the market says what it
   // allows, then a level that leaves the position well clear of liquidation.
   const [picked, setPicked] = useState<number>();
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<{ text: string; sig?: string; where: 'deposit' | 'close' | 'slider' }>();
+  const busy = priv.busy;
+  const [status, setStatus] = useState<{ text: string; sig?: string; left?: PublicLeft[]; where: 'deposit' | 'close' | 'slider' }>();
 
   const maxLtv = m ? Number(m.ltv) : 0;
   const defaultLtv = Math.floor((maxLtv * 0.8) / 50) * 50;
@@ -37,60 +36,57 @@ export default function SolanaEarnPage() {
   useEffect(() => setPicked(undefined), [sel]);
 
   const amt = parseAmount(amount, STOCK_DECIMALS);
-  // Public first; whatever the public balance lacks comes out of the private one.
+  // What the wallet holds of this stock: the private balance, plus any public
+  // remainder (spent first, so it ends up in the protocol rather than exposed).
   const privBal = m ? priv.privateOf(m.stock.stockMint) : 0n;
   const pub = m?.balance ?? 0n;
+  const held = pub + privBal;
   const fromPrivate = amt > pub ? amt - pub : 0n;
-  const enough = amt <= pub + privBal;
+  // Locked, the private balance is unknown: the action unlocks and checks.
+  const enough = !priv.unlocked || amt <= held;
   const borrowed = m ? (stockValue(amt, m.priceE8) * BigInt(ltv)) / BPS : 0n;
   const borrowRate = p ? borrowRateBps(p) : undefined;
   const spread = p && borrowRate !== undefined ? p.vaultAprBps - borrowRate : undefined;
   const extra = spread !== undefined ? (spread * BigInt(ltv)) / BPS : undefined;
   const healthAtOpen = m && ltv > 0 ? (Number(m.threshold) / ltv).toFixed(2) : '-';
 
+  /// Every action goes through the private layer: it unshields what the
+  /// public side lacks, runs the instructions, and shields what came back.
   async function run(
     where: 'deposit' | 'close' | 'slider',
-    build: () => Promise<Parameters<typeof send>[2]>,
+    label: string,
+    build: () => Promise<Awaited<ReturnType<typeof ix.earnClose>>[]>,
     msg: string,
-    privacy?: { unshield?: bigint; shieldAfter?: boolean },
+    o: { spend?: bigint; returns?: boolean } = {},
   ) {
-    if (!address || !provider) return;
-    setBusy(true);
+    if (!address || !provider) return setStatus({ text: 'Connect a wallet first.', where });
+    if (!m) return setStatus({ text: 'Markets are still loading.', where });
     setStatus({ text: msg, where });
     try {
-      let sig: string;
-      if (privacy && (privacy.unshield || privacy.shieldAfter)) {
-        const sigs = await priv.execute({
-          unshield: privacy.unshield ? { mint: m!.stock.stockMint, amount: privacy.unshield } : undefined,
-          ixs: build,
-          shieldAfter: privacy.shieldAfter ? [m!.stock.stockMint, usdcMint] : undefined,
-          progress: (text) => setStatus({ text, where }),
-        });
-        sig = sigs[sigs.length - 1];
-        setStatus({ text: `Done. ${sigs.length} transactions.`, sig, where });
-      } else {
-        sig = await send(provider, address, await build());
-        setStatus({ text: 'Done.', sig, where });
-      }
+      const sigs = await priv.act({
+        label,
+        spend: o.spend ? { mint: m.stock.stockMint, amount: o.spend } : undefined,
+        ixs: build,
+        returns: o.returns ? [m.stock.stockMint, usdcMint] : undefined,
+        progress: (text) => setStatus({ text, where }),
+      });
+      setStatus({ text: sigs.length > 1 ? `Done. ${sigs.length} transactions.` : 'Done.', sig: sigs[sigs.length - 1], where });
       if (where === 'deposit') setAmount('');
-      refresh();
     } catch (e) {
-      setStatus({ text: errorText(e), where });
+      setStatus({ ...statusFromError(e), where });
     } finally {
-      setBusy(false);
+      refresh();
     }
   }
 
   const deposit = () =>
-    run('deposit', async () => [await ix.earnDeposit(address!, m!.stock, amt, ltv)], 'Depositing and borrowing...', {
-      unshield: fromPrivate,
+    run('deposit', 'deposit', async () => [await ix.earnDeposit(address!, m!.stock, amt, ltv)], 'Depositing and borrowing...', {
+      spend: amt,
     });
   const close = () =>
-    run('close', async () => [await ix.earnClose(address!, m!.stock)], 'Closing...', {
-      shieldAfter: priv.unlocked && backPrivate,
-    });
+    run('close', 'close', async () => [await ix.earnClose(address!, m!.stock)], 'Closing...', { returns: true });
   const moveSlider = () =>
-    run('slider', async () => [await ix.earnSetTarget(address!, m!.stock, ltv)], 'Moving the position...');
+    run('slider', 'move the target', async () => [await ix.earnSetTarget(address!, m!.stock, ltv)], 'Moving the position...');
 
   const has = !!position;
   const health =
@@ -122,7 +118,11 @@ export default function SolanaEarnPage() {
       </Hero>
 
       <Panel>
+        <PrivacyBar />
         {error && !snap && <p className="text-[13px] text-[#b4571f]">{error}</p>}
+        {error && snap && (
+          <p className="text-[12px] text-[#b4571f]">Showing data from {ago(snap.at)}: the RPC is not answering, retrying.</p>
+        )}
         {snap && <MarketCards markets={snap.markets} sel={sel} onSelect={setSel} connected={!!address} />}
         {snap && <CreBadge cre={snap.cre} />}
 
@@ -135,8 +135,8 @@ export default function SolanaEarnPage() {
 
             <AmountBox
               label="Deposit"
-              balanceLabel={privBal > 0n ? `${qty(m?.balance)} + ${qty(privBal)} private` : qty(m?.balance)}
-              onMax={() => m && setAmount(toDecimal(m.balance + privBal, STOCK_DECIMALS))}
+              balanceLabel={priv.unlocked ? `${qty(held)} private` : pub > 0n ? `${qty(pub)} public, private locked` : 'private, locked'}
+              onMax={() => m && setAmount(toDecimal(held, STOCK_DECIMALS))}
               value={amount}
               onChange={setAmount}
               unit={m?.stock.ticker ?? ''}
@@ -175,29 +175,37 @@ export default function SolanaEarnPage() {
             </dl>
             {m && !m.fresh && (
               <p className="mt-3 text-[12px] text-[#b4571f]">
-                No fresh price for {m.stock.ticker}: borrowing waits until the keeper relays one.
+                No fresh price for {m.stock.ticker}: borrowing waits for the next one from the CRE workflow.
               </p>
             )}
 
             <button
               onClick={address ? deposit : () => connect()}
-              disabled={busy || (!!address && (amt === 0n || !m || !enough || ltv === 0))}
+              disabled={busy || (!!address && (!m || amt === 0n || !enough || ltv === 0))}
               className={`mt-4 ${primaryBtn}`}
             >
               {!address
                 ? 'Connect Wallet'
                 : busy && status?.where === 'deposit'
                   ? status.text
-                  : m && !enough
-                    ? `Not enough ${m.stock.ticker}, see the Faucet`
-                    : fromPrivate > 0n
-                      ? 'Unshield and deposit'
-                      : has
-                      ? 'Add to the position'
-                      : 'Deposit and start earning'}
+                  : !m
+                    ? 'Loading markets...'
+                    : !enough
+                      ? `Not enough ${m.stock.ticker}, see the Faucet`
+                      : amt === 0n
+                        ? 'Enter an amount'
+                        : has
+                          ? 'Add to the position'
+                          : 'Deposit and start earning'}
             </button>
-            {fromPrivate > 0n && enough && <FromPrivateNote amount={qty(fromPrivate)} label={m?.stock.ticker ?? ''} />}
-            {!busy && status?.where === 'deposit' && <Status text={status.text} sig={status.sig} />}
+            {amt > 0n && fromPrivate > 0n && (
+              <p className="mt-2 text-[12px] text-fg-muted">
+                {qty(fromPrivate)} {m?.stock.ticker} leaves your private balance first: one approval, about 5
+                transactions, because the proofs do not fit in one. The program sees the deposit amount, as it must
+                to price the loan.
+              </p>
+            )}
+            {!busy && status?.where === 'deposit' && <ActionStatus status={status} />}
           </div>
 
           <div className={card}>
@@ -232,7 +240,7 @@ export default function SolanaEarnPage() {
                     {busy && status?.where === 'slider' ? status.text : `Move the target to ${pct(ltv)}`}
                   </button>
                 )}
-                {!busy && status?.where === 'slider' && <Status text={status.text} sig={status.sig} />}
+                {!busy && status?.where === 'slider' && <ActionStatus status={status} />}
                 <AgentsCard
                   last={
                     position!.lastAgentOp
@@ -244,7 +252,10 @@ export default function SolanaEarnPage() {
                   that debt is bought back as more stock. A Chainlink CRE workflow makes the calls every minute, and the
                   calls are open to anyone: nothing here is yours to do, and nothing here is ours to control.
                 </AgentsCard>
-                <ReturnPrivately checked={backPrivate} onChange={setBackPrivate} what="the stock and any USDC left over" />
+                <p className="mt-3 text-[12px] text-fg-muted">
+                  Closing hands the stock and any USDC left over back to your private balance: one approval for the
+                  close, one for the shield. The amounts are visible as they leave the protocol.
+                </p>
                 <button onClick={close} disabled={busy} className={`mt-4 ${secondaryBtn}`}>
                   {busy && status?.where === 'close' ? status.text : 'Close, get the stock back'}
                 </button>
@@ -252,12 +263,13 @@ export default function SolanaEarnPage() {
             )}
             {/* Outside the branch on purpose: closing empties this card, and a
                 confirmation that unmounts with it confirms nothing. */}
-            {!busy && status?.where === 'close' && <Status text={status.text} sig={status.sig} />}
+            {!busy && status?.where === 'close' && <ActionStatus status={status} />}
           </div>
         </div>
 
         <p className="text-[12px] text-fg-muted">
-          Devnet: the stocks, GLDY and USDC are stand-ins minted by the Faucet tab; no xStock or GLDY faucet exists
+          Devnet: the stocks, GLDY and USDC are stand-ins minted (straight into your private balance) by the Faucet
+          tab; no xStock or GLDY faucet exists
           on devnet, and GLDY itself is permissioned. Prices are real: a Chainlink CRE workflow reads the live xStocks
           on Jupiter (the share price while NYSE trades, the token&apos;s own price outside it) and GLDY off Orca&apos;s
           pool, and swaps settle at that price minus 5 bps.

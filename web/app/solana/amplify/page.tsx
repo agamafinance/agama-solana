@@ -3,22 +3,21 @@
 import { useEffect, useState } from 'react';
 
 import { asset, AGENT_OPS, BPS, STOCK_DECIMALS } from '@/lib/solana/config';
-import { usePrivate } from '@/lib/solana/PrivateContext';
-import { FromPrivateNote, ReturnPrivately } from '@/components/solana/private';
+import { usePrivate, type PublicLeft } from '@/lib/solana/PrivateContext';
+import { ActionStatus, PrivacyBar, statusFromError } from '@/components/solana/privacy';
 import { useSolanaWallet } from '@/lib/solana/WalletProvider';
 import {
-  ago, borrowRateBps, errorText, ix, pct, px, qty, send, stockFor, stockValue, usd, useSnapshot,
+  ago, borrowRateBps, ix, pct, px, qty, stockFor, stockValue, usd, useSnapshot,
 } from '@/lib/solana/useSolana';
 import {
   AgentsCard, AmountBox, card, Hero, CreBadge, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
-  Stat, Status, toDecimal,
+  Stat, toDecimal,
 } from '@/components/solana/ui';
 
 export default function SolanaAmplifyPage() {
   const { address, provider, connect } = useSolanaWallet();
   const { snap, error, refresh } = useSnapshot(address);
   const priv = usePrivate();
-  const [backPrivate, setBackPrivate] = useState(true);
   const [sel, setSel] = useState(3);
   const m = snap?.markets[sel];
   const position = snap?.amplify[sel];
@@ -26,55 +25,54 @@ export default function SolanaAmplifyPage() {
 
   const [amount, setAmount] = useState('');
   const [picked, setPicked] = useState<number>();
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<{ text: string; sig?: string; where: 'open' | 'close' }>();
+  const busy = priv.busy;
+  const [status, setStatus] = useState<{ text: string; sig?: string; left?: PublicLeft[]; where: 'open' | 'close' }>();
   useEffect(() => setPicked(undefined), [sel]);
 
   // A loop at L carries an LTV of (L - 1) / L, so the market's LTV caps L at
   // 1 / (1 - LTV). The swap fee nudges the LTV up a hair, so the slider stops
   // just short of the edge rather than ending in a revert.
   const ltv = m ? Number(m.ltv) / 10_000 : 0;
-  const maxLev = m ? Math.floor((1 / (1 - ltv * 0.995)) * 100) / 100 : 1;
+  // An LTV at or below zero (a market whose off-hours buffer ate it) allows no loop.
+  const maxLev = m && ltv > 0 ? Math.floor((1 / (1 - ltv * 0.995)) * 100) / 100 : 1;
+  const canLoop = maxLev > 1.05;
   const lev = Math.min(picked ?? Math.max(1.1, Math.floor(maxLev * 90) / 100), maxLev);
   const levBps = Math.round(lev * 10_000);
 
   const amt = parseAmount(amount, STOCK_DECIMALS);
   const privBal = m ? priv.privateOf(m.stock.stockMint) : 0n;
   const pub = m?.balance ?? 0n;
+  const held = pub + privBal;
   const fromPrivate = amt > pub ? amt - pub : 0n;
-  const enough = amt <= pub + privBal;
+  const enough = !priv.unlocked || amt <= held;
   const borrow = m ? (stockValue(amt, m.priceE8) * BigInt(levBps - 10_000)) / BPS : 0n;
   const bought = m && p ? stockFor(borrow, m.priceE8, p.dexFeeBps) : 0n;
   const ltvAfter = m && amt > 0n ? (borrow * BPS) / stockValue(amt + bought, m.priceE8) : 0n;
 
   async function run(
     where: 'open' | 'close',
-    build: () => Promise<Parameters<typeof send>[2]>,
+    label: string,
+    build: () => Promise<Awaited<ReturnType<typeof ix.amplifyClose>>[]>,
     msg: string,
-    privacy?: { unshield?: bigint; shieldAfter?: boolean },
+    o: { spend?: bigint; returns?: boolean } = {},
   ) {
-    if (!address || !provider) return;
-    setBusy(true);
+    if (!address || !provider) return setStatus({ text: 'Connect a wallet first.', where });
+    if (!m) return setStatus({ text: 'Markets are still loading.', where });
     setStatus({ text: msg, where });
     try {
-      if (privacy && (privacy.unshield || privacy.shieldAfter)) {
-        const sigs = await priv.execute({
-          unshield: privacy.unshield ? { mint: m!.stock.stockMint, amount: privacy.unshield } : undefined,
-          ixs: build,
-          shieldAfter: privacy.shieldAfter ? [m!.stock.stockMint] : undefined,
-          progress: (text) => setStatus({ text, where }),
-        });
-        setStatus({ text: `Done. ${sigs.length} transactions.`, sig: sigs[sigs.length - 1], where });
-      } else {
-        const sig = await send(provider, address, await build());
-        setStatus({ text: 'Done.', sig, where });
-      }
+      const sigs = await priv.act({
+        label,
+        spend: o.spend ? { mint: m.stock.stockMint, amount: o.spend } : undefined,
+        ixs: build,
+        returns: o.returns ? [m.stock.stockMint] : undefined,
+        progress: (text) => setStatus({ text, where }),
+      });
+      setStatus({ text: sigs.length > 1 ? `Done. ${sigs.length} transactions.` : 'Done.', sig: sigs[sigs.length - 1], where });
       if (where === 'open') setAmount('');
-      refresh();
     } catch (e) {
-      setStatus({ text: errorText(e), where });
+      setStatus({ ...statusFromError(e), where });
     } finally {
-      setBusy(false);
+      refresh();
     }
   }
 
@@ -88,8 +86,8 @@ export default function SolanaAmplifyPage() {
     <>
       <Hero art={asset('/logos/coin-pair-amplify.svg')} title={<>Amplify your stock</>}>
         <p className="mt-4 max-w-[640px] text-[15px] text-fg-muted">
-          One slider. Agama borrows USDC against your stock, buys more of the same stock with it and pledges it, all
-          in one transaction. The agents hold the multiple as the price moves: they buy a little more when it rises
+          One slider. Agama borrows USDC against your stock, buys more of the same stock with it and pledges it, in
+          one transaction; your stock leaves and returns to your private balance around it. The agents hold the multiple as the price moves: they buy a little more when it rises
           and sell just enough to repay when it falls.
         </p>
         <div className="mt-7 flex flex-wrap gap-8">
@@ -99,7 +97,11 @@ export default function SolanaAmplifyPage() {
       </Hero>
 
       <Panel>
+        <PrivacyBar />
         {error && !snap && <p className="text-[13px] text-[#b4571f]">{error}</p>}
+        {error && snap && (
+          <p className="text-[12px] text-[#b4571f]">Showing data from {ago(snap.at)}: the RPC is not answering, retrying.</p>
+        )}
         {snap && <MarketCards markets={snap.markets} sel={sel} onSelect={setSel} connected={!!address} />}
         {snap && <CreBadge cre={snap.cre} />}
 
@@ -117,8 +119,8 @@ export default function SolanaAmplifyPage() {
               <>
                 <AmountBox
                   label="Deposit"
-                  balanceLabel={privBal > 0n ? `${qty(m?.balance)} + ${qty(privBal)} private` : qty(m?.balance)}
-                  onMax={() => m && setAmount(toDecimal(m.balance + privBal, STOCK_DECIMALS))}
+                  balanceLabel={priv.unlocked ? `${qty(held)} private` : pub > 0n ? `${qty(pub)} public, private locked` : 'private, locked'}
+                  onMax={() => m && setAmount(toDecimal(held, STOCK_DECIMALS))}
                   value={amount}
                   onChange={setAmount}
                   unit={m?.stock.ticker ?? ''}
@@ -154,28 +156,37 @@ export default function SolanaAmplifyPage() {
                   onClick={
                     address
                       ? () =>
-                          run('open', async () => [await ix.amplifyOpen(address, m!.stock, amt, levBps)], 'Looping...', {
-                            unshield: fromPrivate,
+                          run('open', 'loop', async () => [await ix.amplifyOpen(address, m!.stock, amt, levBps)], 'Looping...', {
+                            spend: amt,
                           })
                       : () => connect()
                   }
-                  disabled={busy || (!!address && (amt === 0n || !m || !enough))}
+                  disabled={busy || (!!address && (!m || amt === 0n || !enough || !canLoop))}
                   className={`mt-4 ${primaryBtn}`}
                 >
                   {!address
                     ? 'Connect Wallet'
                     : busy && status?.where === 'open'
                       ? status.text
-                      : m && !enough
-                        ? `Not enough ${m.stock.ticker}, see the Faucet`
-                        : fromPrivate > 0n
-                          ? `Unshield and amplify ${lev.toFixed(2)}x`
-                          : `Amplify ${lev.toFixed(2)}x`}
+                      : !m
+                        ? 'Loading markets...'
+                        : !canLoop
+                          ? 'No loop possible on this market right now'
+                          : !enough
+                            ? `Not enough ${m.stock.ticker}, see the Faucet`
+                            : amt === 0n
+                              ? 'Enter an amount'
+                              : `Amplify ${lev.toFixed(2)}x`}
                 </button>
-                {fromPrivate > 0n && enough && <FromPrivateNote amount={qty(fromPrivate)} label={m?.stock.ticker ?? ''} />}
+                {amt > 0n && fromPrivate > 0n && (
+                  <p className="mt-2 text-[12px] text-fg-muted">
+                    {qty(fromPrivate)} {m?.stock.ticker} leaves your private balance first: one approval, about 5
+                    transactions. The program sees the amount, as it must to price the loan.
+                  </p>
+                )}
               </>
             )}
-            {!busy && status?.where === 'open' && <Status text={status.text} sig={status.sig} />}
+            {!busy && status?.where === 'open' && <ActionStatus status={status} />}
           </div>
 
           <div className={card}>
@@ -204,11 +215,14 @@ export default function SolanaAmplifyPage() {
                   The price rises, the agents borrow and buy more stock; it falls, they sell just enough to repay. The
                   multiple stays where you set it. A Chainlink CRE workflow makes the calls every minute, and anyone else can too.
                 </AgentsCard>
-                <ReturnPrivately checked={backPrivate} onChange={setBackPrivate} what="the stock" />
+                <p className="mt-3 text-[12px] text-fg-muted">
+                  Closing hands what is left of the stock back to your private balance: one approval for the close,
+                  one for the shield.
+                </p>
                 <button
                   onClick={() =>
-                    run('close', async () => [await ix.amplifyClose(address!, m!.stock)], 'Unwinding...', {
-                      shieldAfter: priv.unlocked && backPrivate,
+                    run('close', 'close', async () => [await ix.amplifyClose(address!, m!.stock)], 'Unwinding...', {
+                      returns: true,
                     })
                   }
                   disabled={busy}
@@ -218,7 +232,7 @@ export default function SolanaAmplifyPage() {
                 </button>
               </>
             )}
-            {!busy && status?.where === 'close' && <Status text={status.text} sig={status.sig} />}
+            {!busy && status?.where === 'close' && <ActionStatus status={status} />}
           </div>
         </div>
       </Panel>

@@ -1,36 +1,68 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+// Private by default. Every Agama token is a confidential Token-2022 token and
+// a holder's tokens live in the confidential balance: the faucet shields what
+// it mints, a deposit unshields exactly what the public side lacks, a close
+// shields exactly what came back.
+//
+// One action at a time, app-wide: a confidential balance carries a client-
+// written copy of the readable balance, and two actions built from the same
+// read would write it twice from stale data and strand the balance. Every
+// action takes the lock, re-reads the accounts, then builds.
+
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PublicKey, TransactionInstruction } from '@solana/web3.js';
 
+import { countTxs, PartialFailure, runBatch, type Progress, type Step } from './batch';
 import { useSolanaWallet } from './WalletProvider';
 import { connection } from './useSolana';
-import type { Balance, Keys, Progress } from './privateTokens';
-import type { Step } from './confidential';
+import { tokenByMint, type Balance, type Keys } from './privateTokens';
 
 /// The proof code and its WASM load in the browser only, on first use.
 const lib = () => import('./confidential');
+
+/// What an action left public when it stopped part way, so the page can offer
+/// to shield it back in one click.
+export type PublicLeft = { mint: PublicKey; amount: bigint };
+
+export class PrivateActionError extends Error {
+  constructor(message: string, readonly publicLeft?: PublicLeft[]) {
+    super(message);
+  }
+}
 
 type Ctx = {
   keys?: Keys;
   unlocked: boolean;
   unlocking: boolean;
-  unlock: () => Promise<void>;
+  /// One signature over the standard message; asked once per session.
+  unlock: () => Promise<Keys>;
+  lock: () => void;
+  /// True while an action holds the lock, anywhere in the app.
+  busy: boolean;
   balances?: Balance[];
+  balancesAt?: number;
+  balancesError: string;
   refresh: () => void;
-  /// Private balance usable right now (available plus incoming), 0 while locked.
+  /// Private balance (available plus incoming); 0 while locked.
   privateOf: (mint: PublicKey) => bigint;
-  /// Unshield what is missing, run the program instructions, shield what came
-  /// back. Each stage is one wallet approval; returns every signature.
-  execute: (o: {
-    unshield?: { mint: PublicKey; amount: bigint };
+  publicOf: (mint: PublicKey) => bigint;
+  /// Unshield what the public side lacks for `spend`, run the program
+  /// instructions, then shield exactly what `returns` brought back.
+  act: (o: {
+    label: string;
+    spend?: { mint: PublicKey; amount: bigint };
     ixs: () => Promise<TransactionInstruction[]>;
-    shieldAfter?: PublicKey[];
+    returns?: PublicKey[];
     progress?: Progress;
   }) => Promise<string[]>;
-  /// Run raw confidential steps (the Private tab), with incoming sends folded
-  /// in first when the steps need it.
-  run: (steps: () => Promise<Step[]>, progress?: Progress, applyFirst?: PublicKey) => Promise<string[]>;
+  /// Mint (the faucet) and shield what was minted, in one approval.
+  mintPrivately: (o: {
+    ixGroups: TransactionInstruction[][];
+    minted: { mint: PublicKey; amount: bigint }[];
+    progress?: Progress;
+  }) => Promise<string[]>;
+  shield: (items: PublicLeft[], progress?: Progress) => Promise<string[]>;
 };
 
 const C = createContext<Ctx>(null as unknown as Ctx);
@@ -38,44 +70,85 @@ const C = createContext<Ctx>(null as unknown as Ctx);
 export function PrivateProvider({ children }: { children: ReactNode }) {
   const { address, provider } = useSolanaWallet();
   const [keys, setKeys] = useState<Keys>();
+  const keysRef = useRef<Keys | undefined>(undefined);
   const [unlocking, setUnlocking] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [balances, setBalances] = useState<Balance[]>();
+  const [balancesAt, setBalancesAt] = useState<number>();
+  const [balancesError, setBalancesError] = useState('');
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
+  const lockChain = useRef<Promise<unknown>>(Promise.resolve());
   const key = address?.toBase58();
 
-  // A different wallet, different keys: never carry them across.
+  // A different wallet or account, different keys: never carry them across.
   useEffect(() => {
+    keysRef.current = undefined;
     setKeys(undefined);
     setBalances(undefined);
+    setBalancesAt(undefined);
   }, [key]);
 
+  // Balances every 15 s, backing off to 2 min while the RPC is failing.
   useEffect(() => {
     if (!address) return;
     let alive = true;
-    const load = () =>
-      lib()
-        .then((c) => c.readBalances(connection, address, keys))
-        .then((b) => alive && setBalances(b))
-        .catch(() => {});
+    let wait = 15_000;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async () => {
+      try {
+        const b = await (await lib()).readBalances(connection, address, keys);
+        if (!alive) return;
+        setBalances(b);
+        setBalancesAt(Date.now());
+        setBalancesError('');
+        wait = 15_000;
+      } catch (e: any) {
+        if (!alive) return;
+        setBalancesError(String(e?.message ?? e).slice(0, 120));
+        wait = Math.min(wait * 2, 120_000);
+      }
+      if (alive) timer = setTimeout(load, wait);
+    };
     load();
-    const id = setInterval(load, 15_000);
     return () => {
       alive = false;
-      clearInterval(id);
+      clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, keys, tick]);
 
   const unlock = useCallback(async () => {
-    if (!provider) return;
+    if (keysRef.current) return keysRef.current;
+    if (!provider) throw new Error('Connect a wallet first');
     setUnlocking(true);
     try {
-      setKeys(await (await lib()).unlockKeys(provider));
+      const k = await (await lib()).unlockKeys(provider);
+      keysRef.current = k;
+      setKeys(k);
+      return k;
     } finally {
       setUnlocking(false);
     }
   }, [provider]);
+
+  const lock = useCallback(() => {
+    keysRef.current = undefined;
+    setKeys(undefined);
+  }, []);
+
+  const withLock = useCallback(<T,>(f: () => Promise<T>): Promise<T> => {
+    const run = lockChain.current.then(async () => {
+      setBusy(true);
+      try {
+        return await f();
+      } finally {
+        setBusy(false);
+      }
+    });
+    lockChain.current = run.catch(() => {});
+    return run;
+  }, []);
 
   const privateOf = useCallback(
     (mint: PublicKey) => {
@@ -84,66 +157,170 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
     },
     [balances],
   );
-
-  const applyIfPending = useCallback(
-    async (mint: PublicKey, progress?: Progress) => {
-      if (!address || !provider || !keys) return [];
-      const c = await lib();
-      const steps = await c.applySteps(connection, address, keys, mint);
-      return steps.length ? c.runBatch(provider, connection, address, steps, progress) : [];
-    },
-    [address, provider, keys],
+  const publicOf = useCallback(
+    (mint: PublicKey) => balances?.find((x) => x.token.mint.equals(mint))?.public ?? 0n,
+    [balances],
   );
 
-  const run = useCallback<Ctx['run']>(
-    async (steps, progress, applyFirst) => {
-      if (!address || !provider) throw new Error('Connect a wallet first');
-      const sigs = applyFirst ? await applyIfPending(applyFirst, progress) : [];
-      progress?.('Building the proofs...');
-      sigs.push(...(await (await lib()).runBatch(provider, connection, address, await steps(), progress)));
-      refresh();
-      return sigs;
+  const need = useCallback(() => {
+    if (!address || !provider) throw new Error('Connect a wallet first');
+    return { address, provider };
+  }, [address, provider]);
+
+  const shieldNow = useCallback(
+    async (k: Keys, items: PublicLeft[], progress?: Progress) => {
+      const { address, provider } = need();
+      const c = await lib();
+      const steps = await c.shieldSteps(connection, address, k, items.filter((i) => i.amount > 0n));
+      return steps.length ? runBatch(provider, connection, address, steps, progress) : [];
     },
-    [address, provider, applyIfPending, refresh],
+    [need],
   );
 
-  const execute = useCallback<Ctx['execute']>(
-    async ({ unshield, ixs, shieldAfter, progress }) => {
-      if (!address || !provider) throw new Error('Connect a wallet first');
-      const c = await lib();
-      const sigs: string[] = [];
-      const steps: Step[] = [];
-      if (unshield && unshield.amount > 0n) {
-        if (!keys) throw new Error('Unlock your private balances first');
-        // The withdraw proof is made against the readable balance, so incoming
-        // sends are folded in before it is built.
-        sigs.push(...(await applyIfPending(unshield.mint, progress)));
-        progress?.('Building the proofs...');
-        steps.push(...(await c.unshieldSteps(connection, address, keys, unshield.mint, unshield.amount)));
-      }
-      steps.push({ ixs: await ixs() });
-      sigs.push(...(await c.runBatch(provider, connection, address, steps, progress)));
-      if (shieldAfter?.length && keys) {
-        const after = await c.readBalances(connection, address, keys);
-        const items = shieldAfter
-          .map((mint) => ({ mint, amount: after.find((b) => b.token.mint.equals(mint))?.public ?? 0n }))
-          .filter((i) => i.amount > 0n);
-        if (items.length) {
-          progress?.('Returning it to your private balance...');
-          sigs.push(...(await c.runBatch(provider, connection, address, await c.shieldSteps(connection, address, keys, items), progress)));
+  const shield = useCallback<Ctx['shield']>(
+    (items, progress) =>
+      withLock(async () => {
+        try {
+          return await shieldNow(await unlock(), items, progress);
+        } finally {
+          refresh();
         }
-      }
-      refresh();
-      return sigs;
-    },
-    [address, provider, keys, applyIfPending, refresh],
+      }),
+    [withLock, shieldNow, unlock, refresh],
+  );
+
+  const act = useCallback<Ctx['act']>(
+    ({ label, spend, ixs, returns, progress }) =>
+      withLock(async () => {
+        const { address, provider } = need();
+        try {
+          const c = await lib();
+          // Keys only when the action touches the private side: an unshield
+          // before, or a shield after. Moving the slider needs none.
+          const spendsPublicOnly = !spend || spend.amount === 0n;
+          let k = keysRef.current;
+          // Fresh read under the lock: the proofs are built against it.
+          let before = await c.readBalances(connection, address, k);
+          const bal = (m: PublicKey) => before.find((b) => b.token.mint.equals(m));
+
+          const steps: Step[] = [];
+          let fromPrivate = 0n;
+          if (!spendsPublicOnly) {
+            const pub = bal(spend!.mint)?.public ?? 0n;
+            fromPrivate = spend!.amount > pub ? spend!.amount - pub : 0n;
+            if (fromPrivate > 0n) {
+              if (!k) {
+                k = await unlock();
+                before = await c.readBalances(connection, address, k);
+              }
+              const b = bal(spend!.mint);
+              const avail = b?.private ?? 0n;
+              const pending = b?.pending ?? 0n;
+              if (avail + pending < fromPrivate) {
+                const t = tokenByMint(spend!.mint);
+                throw new Error(`Not enough ${t.label}: you hold ${fmt(pub + avail + pending, t.decimals)}. See the Faucet.`);
+              }
+              if (avail < fromPrivate && pending > 0n) {
+                // Incoming private transfers first: the withdraw proof is made
+                // against the readable balance.
+                progress?.('Folding in incoming private transfers...');
+                await runBatch(provider, connection, address, await c.applySteps(connection, address, k, spend!.mint), progress);
+              }
+              progress?.('Building the proofs...');
+              steps.push(...(await c.unshieldSteps(connection, address, k, spend!.mint, fromPrivate)));
+            }
+          }
+          if (returns?.length && !k) {
+            k = await unlock();
+            before = await c.readBalances(connection, address, k);
+          }
+          const unshieldTxs = steps.length ? await countTxs(address, steps) : 0;
+          steps.push({ ixs: await ixs(), label });
+
+          let sigs: string[];
+          try {
+            sigs = await runBatch(provider, connection, address, steps, progress);
+          } catch (e) {
+            if (e instanceof PartialFailure && fromPrivate > 0n && e.landed.length >= unshieldTxs) {
+              const t = tokenByMint(spend!.mint);
+              throw new PrivateActionError(
+                `${e.cause}. The unshield went through, so ${fmt(fromPrivate, t.decimals)} ${t.label} is now public: shield it back.`,
+                [{ mint: spend!.mint, amount: fromPrivate }],
+              );
+            }
+            throw e;
+          }
+
+          if (returns?.length) {
+            const after = await c.readBalances(connection, address, k);
+            const items = returns
+              .map((mint) => {
+                const was = bal(mint)?.public ?? 0n;
+                const now = after.find((b) => b.token.mint.equals(mint))?.public ?? 0n;
+                return { mint, amount: now > was ? now - was : 0n };
+              })
+              .filter((i) => i.amount > 0n);
+            if (items.length) {
+              progress?.('Returning it to your private balance...');
+              try {
+                sigs.push(...(await shieldNow(k!, items, progress)));
+              } catch (e) {
+                const what = items.map((i) => `${fmt(i.amount, tokenByMint(i.mint).decimals)} ${tokenByMint(i.mint).label}`).join(' and ');
+                throw new PrivateActionError(
+                  `The ${label} went through, but returning ${what} to your private balance stopped (${e instanceof Error ? e.message : String(e)}). It is public now: shield it back.`,
+                  items,
+                );
+              }
+            }
+          }
+          return sigs;
+        } finally {
+          refresh();
+        }
+      }),
+    [withLock, need, unlock, shieldNow, refresh],
+  );
+
+  const mintPrivately = useCallback<Ctx['mintPrivately']>(
+    ({ ixGroups, minted, progress }) =>
+      withLock(async () => {
+        const { address, provider } = need();
+        try {
+          const k = await unlock();
+          const c = await lib();
+          progress?.('Building the proofs...');
+          // Built before the mint lands: minting only touches the public side,
+          // so the encrypted state read now is still right when they execute.
+          const shieldSteps = await c.shieldSteps(connection, address, k, minted);
+          const steps: Step[] = [...ixGroups.map((ixs) => ({ ixs, label: 'mint' })), ...shieldSteps];
+          try {
+            return await runBatch(provider, connection, address, steps, progress);
+          } catch (e) {
+            if (e instanceof PartialFailure && e.landed.length >= ixGroups.length) {
+              throw new PrivateActionError(`${e.cause}. The tokens were minted but not all shielded: shield them below.`, minted);
+            }
+            throw e;
+          }
+        } finally {
+          refresh();
+        }
+      }),
+    [withLock, need, unlock, refresh],
   );
 
   return (
-    <C.Provider value={{ keys, unlocked: !!keys, unlocking, unlock, balances, refresh, privateOf, execute, run }}>
+    <C.Provider
+      value={{
+        keys, unlocked: !!keys, unlocking, unlock, lock, busy, balances, balancesAt, balancesError, refresh,
+        privateOf, publicOf, act, mintPrivately, shield,
+      }}
+    >
       {children}
     </C.Provider>
   );
 }
+
+const fmt = (v: bigint, decimals: number) =>
+  (Number(v) / 10 ** decimals).toLocaleString('en-US', { maximumFractionDigits: decimals === 6 ? 2 : 4 });
 
 export const usePrivate = () => useContext(C);

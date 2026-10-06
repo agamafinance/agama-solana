@@ -4,7 +4,7 @@
 import type { PublicKey } from '@solana/web3.js';
 import type { AeKey, ElGamalKeypair, ElGamalSecretKey } from '@solana/zk-sdk';
 
-import { lpMint, STOCK_DECIMALS, STOCKS, USDC_DECIMALS, usdcMint } from './config';
+import { STOCK_DECIMALS, STOCKS, USDC_DECIMALS, usdcMint } from './config';
 
 export type Keys = { elgamal: ElGamalKeypair; secret: ElGamalSecretKey; ae: AeKey };
 
@@ -12,7 +12,6 @@ export type PrivToken = { key: string; label: string; mint: PublicKey; decimals:
 export const PRIVATE_TOKENS: PrivToken[] = [
   { key: 'USDC', label: 'USDC', mint: usdcMint, decimals: USDC_DECIMALS },
   ...STOCKS.map((s) => ({ key: s.symbol, label: s.ticker, mint: s.stockMint, decimals: STOCK_DECIMALS })),
-  { key: 'LP', label: 'Pool LP', mint: lpMint, decimals: USDC_DECIMALS },
 ];
 export const tokenByMint = (mint: PublicKey) => PRIVATE_TOKENS.find((t) => t.mint.equals(mint))!;
 
@@ -26,4 +25,4 @@ export type Balance = {
   pending?: bigint;
 };
 
-export type Progress = (text: string) => void;
+export type { Progress } from './batch';

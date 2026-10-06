@@ -1,39 +1,28 @@
 'use client';
 
 // Confidential balances in the browser, for every Agama token: USDC, the
-// stocks, GLDY and the LP token are Token-2022 mints with the confidential transfer
+// stocks and GLDY are Token-2022 mints with the confidential transfer
 // extension. A balance moved into the confidential side is an ElGamal
 // ciphertext only its owner can read; a private send hides the amount from
 // everyone but the two parties. The ZK proofs are built here, with the
 // official client (@solana-program/token-2022/confidential and @solana/zk-sdk),
 // and checked on chain by the ZK ElGamal proof program.
 //
+// Private by default: what a holder keeps sits in the confidential balance.
 // What stays public, by design: the program needs plain amounts to price a
-// loan, so anything entering or leaving the protocol, and every position, is
-// public state. The private side is what you hold and what you send.
+// loan, so the amount entering or leaving the protocol, and every position,
+// is public state.
 //
-// One wallet approval per action: every transaction an action needs is built
-// first (proofs included), signed in one `signAllTransactions` when the wallet
-// has it, then sent in order.
+// Every transaction an action needs is built first (proofs included) and goes
+// through batch.ts: one approval, sent in order.
 import {
-  AccountRole,
   address,
   createNoopSigner,
   createSolanaRpc,
-  createTransactionMessage,
-  createTransactionPlanner,
-  getBase64EncodedWireTransaction,
-  partiallySignTransactionMessageWithSigners,
-  pipe,
-  appendTransactionMessageInstructions,
   sequentialInstructionPlan,
   singleInstructionPlan,
-  setTransactionMessageFeePayerSigner,
-  setTransactionMessageLifetimeUsingBlockhash,
   type Address,
   type Instruction,
-  type InstructionPlan,
-  type TransactionSigner,
 } from '@solana/kit';
 import {
   getApplyConfidentialPendingBalanceInstruction,
@@ -43,15 +32,15 @@ import {
 } from '@solana-program/token-2022';
 import {
   decryptConfidentialTransferBalance,
-  getConfidentialTransferInstructionPlan,
   getConfidentialWithdrawInstructionPlan,
   getCreateConfidentialTransferAccountInstructionPlan,
 } from '@solana-program/token-2022/confidential';
-import { AeKey, ConfidentialKeys, ElGamalKeypair, ElGamalSecretKey } from '@solana/zk-sdk';
-import { PublicKey, VersionedTransaction, type Connection, type TransactionInstruction } from '@solana/web3.js';
+import { ConfidentialKeys } from '@solana/zk-sdk';
+import { PublicKey, type Connection } from '@solana/web3.js';
 
+import type { Step } from './batch';
 import { ata, RPC } from './config';
-import { PRIVATE_TOKENS, tokenByMint, type Balance, type Keys, type Progress } from './privateTokens';
+import { PRIVATE_TOKENS, tokenByMint, type Balance, type Keys } from './privateTokens';
 import type { SolanaProvider } from './wallet';
 
 export const kitRpc = createSolanaRpc(RPC);
@@ -110,97 +99,6 @@ async function fetchTokenAccount(conn: Connection, owner: PublicKey, mint: Publi
 }
 
 // ---------------------------------------------------------------------------
-// Batches: build everything, approve once, send in order
-// ---------------------------------------------------------------------------
-
-/// One step of a batch: either a Kit plan (the proof-carrying flows) or plain
-/// instructions from the Anchor client, which go out as one transaction.
-export type Step = { plan: InstructionPlan } | { ixs: TransactionInstruction[] };
-
-function fromWeb3(ix: TransactionInstruction): Instruction {
-  return {
-    programAddress: kaddr(ix.programId),
-    accounts: ix.keys.map((k) => ({
-      address: kaddr(k.pubkey),
-      role: k.isSigner
-        ? k.isWritable ? AccountRole.WRITABLE_SIGNER : AccountRole.READONLY_SIGNER
-        : k.isWritable ? AccountRole.WRITABLE : AccountRole.READONLY,
-    })),
-    data: new Uint8Array(ix.data),
-  };
-}
-
-async function messagesFor(payer: TransactionSigner, steps: Step[]) {
-  const base = () => pipe(createTransactionMessage({ version: 0 }), (m) => setTransactionMessageFeePayerSigner(payer, m));
-  const planner = createTransactionPlanner({ createTransactionMessage: base });
-  const out: any[] = [];
-  const walk = (p: any) => (p.kind === 'single' ? out.push(p.message) : (p.plans ?? []).forEach(walk));
-  for (const step of steps) {
-    if ('ixs' in step) {
-      if (step.ixs.length) out.push(appendTransactionMessageInstructions(step.ixs.map(fromWeb3), base()));
-    } else {
-      walk(await planner(step.plan));
-    }
-  }
-  return out;
-}
-
-/// Build, approve once, send one by one. Returns every signature, in order.
-export async function runBatch(
-  provider: SolanaProvider,
-  conn: Connection,
-  owner: PublicKey,
-  steps: Step[],
-  progress: Progress = () => {},
-): Promise<string[]> {
-  const payer = createNoopSigner(kaddr(owner));
-  const msgs = await messagesFor(payer, steps);
-  if (msgs.length === 0) return [];
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
-  const lifetime = { blockhash: blockhash as any, lastValidBlockHeight: BigInt(lastValidBlockHeight) };
-  const vtxs: VersionedTransaction[] = [];
-  for (const m of msgs) {
-    // Proof context accounts carry their own throwaway signers; the wallet
-    // is a placeholder here and signs below.
-    const tx = await partiallySignTransactionMessageWithSigners(setTransactionMessageLifetimeUsingBlockhash(lifetime, m) as any);
-    vtxs.push(VersionedTransaction.deserialize(Buffer.from(getBase64EncodedWireTransaction(tx), 'base64')));
-  }
-  progress(`Approve ${vtxs.length} transaction${vtxs.length > 1 ? 's' : ''} in the wallet...`);
-  let signed: any[];
-  if (typeof provider.signAllTransactions === 'function') signed = await provider.signAllTransactions(vtxs);
-  else {
-    signed = [];
-    for (const v of vtxs) signed.push(await provider.signTransaction(v));
-  }
-  const sigs: string[] = [];
-  for (let i = 0; i < signed.length; i++) {
-    progress(`Sending ${i + 1} of ${signed.length}...`);
-    const raw = signed[i].serialize();
-    const sig = await conn.sendRawTransaction(raw, { skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0 });
-    await confirm(conn, sig, raw, lastValidBlockHeight);
-    sigs.push(sig);
-  }
-  return sigs;
-}
-
-/// Devnet RPCs drop transactions under load: re-send the same signed bytes
-/// every 2 s until it lands or its blockhash expires. Nothing is re-signed, so
-/// the wallet is asked once.
-async function confirm(conn: Connection, sig: string, raw: Uint8Array, lastValidBlockHeight: number) {
-  for (;;) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const { value } = await conn.getSignatureStatuses([sig], { searchTransactionHistory: true });
-    const st = value[0];
-    if (st?.err) throw new Error(`Transaction failed: ${JSON.stringify(st.err)}`);
-    if (st?.confirmationStatus === 'confirmed' || st?.confirmationStatus === 'finalized') return;
-    if ((await conn.getBlockHeight('confirmed')) > lastValidBlockHeight) {
-      throw new Error(`Expired before landing, nothing was spent: ${sig}`);
-    }
-    await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
-  }
-}
-
-// ---------------------------------------------------------------------------
 // The steps
 // ---------------------------------------------------------------------------
 
@@ -226,6 +124,7 @@ export async function shieldSteps(
     let counter = 0n;
     if (!t || !ctExtension(t)) {
       plans.push({
+        label: `set up the private ${tokenByMint(mint).label} balance`,
         plan: await getCreateConfidentialTransferAccountInstructionPlan({
           payer, owner: payer, mint: kaddr(mint), rpc: kitRpc as any, elgamalKeypair: keys.elgamal, aesKey: keys.ae,
         }),
@@ -248,7 +147,7 @@ export async function shieldSteps(
     );
   }
   // Deposits and applies pack together, as many per transaction as fit.
-  if (ixs.length) plans.push({ plan: sequentialInstructionPlan(ixs) });
+  if (ixs.length) plans.push({ label: 'shield', plan: sequentialInstructionPlan(ixs) });
   return plans;
 }
 
@@ -262,6 +161,7 @@ export async function applySteps(conn: Connection, owner: PublicKey, keys: Keys,
   const payer = createNoopSigner(kaddr(owner));
   return [
     {
+      label: 'fold in incoming',
       plan: singleInstructionPlan(
         getApplyConfidentialPendingBalanceInstruction({
           token: kaddr(ata(owner, mint)),
@@ -281,37 +181,11 @@ export async function unshieldSteps(conn: Connection, owner: PublicKey, keys: Ke
   const payer = createNoopSigner(kaddr(owner));
   return [
     {
+      label: `unshield ${tokenByMint(mint).label}`,
       plan: await getConfidentialWithdrawInstructionPlan({
         token: kaddr(ata(owner, mint)), mint: kaddr(mint), tokenAccount: t, authority: payer, amount,
         decimals: tokenByMint(mint).decimals, elgamalKeypair: keys.elgamal, aesKey: keys.ae, payer, rpc: kitRpc as any,
       }),
     },
   ];
-}
-
-export class RecipientNotReady extends Error {}
-
-/// Private -> the recipient's private balance, amount hidden.
-export async function sendSteps(conn: Connection, owner: PublicKey, keys: Keys, mint: PublicKey, to: PublicKey, amount: bigint): Promise<Step[]> {
-  const src = await fetchTokenAccount(conn, owner, mint);
-  if (!src || !ctExtension(src)) throw new Error('No private balance for this token yet');
-  const dst = await fetchTokenAccount(conn, to, mint);
-  if (!dst || !ctExtension(dst)) {
-    throw new RecipientNotReady(`This address has not set up a private ${tokenByMint(mint).label} balance yet. They open the Private tab and shield any amount once.`);
-  }
-  const payer = createNoopSigner(kaddr(owner));
-  return [
-    {
-      plan: await getConfidentialTransferInstructionPlan({
-        sourceToken: kaddr(ata(owner, mint)), mint: kaddr(mint), destinationToken: kaddr(ata(to, mint)),
-        sourceTokenAccount: src, destinationTokenAccount: dst, authority: payer, amount,
-        sourceElgamalKeypair: keys.elgamal, aesKey: keys.ae, payer, rpc: kitRpc as any,
-      }),
-    },
-  ];
-}
-
-/// How many transactions a list of steps turns into, without sending them.
-export async function countTxs(owner: PublicKey, steps: Step[]): Promise<number> {
-  return (await messagesFor(createNoopSigner(kaddr(owner)), steps)).length;
 }

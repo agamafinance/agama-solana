@@ -4,9 +4,9 @@
 simulation-settings:
   rpcs:
     - chain-name: solana-devnet
-      url: https://rpc.magicblock.app/devnet
+      url: https://api.devnet.solana.com
 
 production-settings:
   rpcs:
     - chain-name: solana-devnet
-      url: https://rpc.magicblock.app/devnet
+      url: https://api.devnet.solana.com

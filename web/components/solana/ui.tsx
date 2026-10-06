@@ -62,7 +62,7 @@ export function Row({ label, value }: { label: string; value: ReactNode }) {
 export function Status({ text, sig }: { text: string; sig?: string }) {
   if (!text) return null;
   return (
-    <p className="mt-2 text-[12px] text-fg-muted" data-testid="status">
+    <p className="mt-2 text-[12px] text-fg-muted" data-testid="status" role="status" aria-live="polite">
       {text}
       {sig && (
         <>
@@ -115,12 +115,13 @@ export function MarketCards({
   );
 }
 
-/// Where the prices come from: a Chainlink CRE workflow, its last report and
-/// how many it has written. Honest about the forwarder it goes through.
-export function CreBadge({ cre }: { cre: { simulation: boolean; reports: number; lastReportAt: number } | undefined }) {
+/// Where the prices come from: a Chainlink CRE workflow, and when it last
+/// applied a price (not when it last wrote: a report whose prices were all
+/// skipped is not a sign of life). Honest about the forwarder it goes through.
+export function CreBadge({ cre }: { cre: { simulation: boolean; reports: number; lastPriceAt: number } | undefined }) {
   if (!cre) return null;
-  const age = Math.max(0, Math.floor(Date.now() / 1000) - cre.lastReportAt);
-  const ageText = cre.lastReportAt === 0 ? 'no report yet' : age < 90 ? `${age} s ago` : `${Math.round(age / 60)} min ago`;
+  const age = Math.max(0, Math.floor(Date.now() / 1000) - cre.lastPriceAt);
+  const ageText = cre.lastPriceAt === 0 ? 'none yet' : age < 90 ? `${age} s ago` : `${Math.round(age / 60)} min ago`;
   return (
     <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-fg-muted" data-testid="cre-badge">
       <span className="inline-flex items-center gap-1.5 rounded-full bg-[#375BD2]/10 px-2.5 py-1 font-medium text-[#375BD2]">
@@ -130,8 +131,10 @@ export function CreBadge({ cre }: { cre: { simulation: boolean; reports: number;
       <span>
         Every minute the DON reads each xStock from two independent sources (Jupiter and the deepest DEX pair) and GLDY
         off Orca&apos;s pool, skips a market whose sources disagree, and writes a signed report. A second workflow runs
-        the agents. Last report {ageText}, {cre.reports.toLocaleString('en-US')} so far
-        {cre.simulation ? ', relayed by the CRE simulator through Chainlink\'s devnet mock forwarder.' : ', through the Keystone Forwarder.'}
+        the agents. Last price applied {ageText}
+        {cre.simulation
+          ? ", through the CRE simulator and Chainlink's devnet mock forwarder (no DON signatures yet)."
+          : ', through the Keystone Forwarder.'}
       </span>
     </div>
   );

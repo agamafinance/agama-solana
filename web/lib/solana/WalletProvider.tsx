@@ -1,7 +1,7 @@
 'use client';
 
 import { PublicKey } from '@solana/web3.js';
-import { createContext, useCallback, useContext, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
 import {
   connectProvider,
   detectWallets,
@@ -84,6 +84,39 @@ export function SolanaWalletProvider({ children }: { children: ReactNode }) {
     const found = await detectWalletsWithRetry();
     setDetected(found);
   }, []);
+
+  // The account can change inside the wallet (Phantom's account switcher)
+  // without a new connect: follow it, so keys derived for one account are
+  // never used with another. PrivateContext clears its keys on any change of
+  // address.
+  useEffect(() => {
+    if (!provider?.on) return;
+    const onChange = (pk: any) => {
+      if (!pk) {
+        setProvider(null);
+        setAddress(undefined);
+        setLabel('');
+        return;
+      }
+      try {
+        setAddress(new PublicKey(pk.toString()));
+      } catch {
+        setAddress(undefined);
+      }
+    };
+    const onDisconnect = () => {
+      setProvider(null);
+      setAddress(undefined);
+      setLabel('');
+    };
+    provider.on('accountChanged', onChange);
+    provider.on('disconnect', onDisconnect);
+    return () => {
+      const off = provider.off ?? provider.removeListener;
+      off?.call(provider, 'accountChanged', onChange);
+      off?.call(provider, 'disconnect', onDisconnect);
+    };
+  }, [provider]);
 
   const disconnect = useCallback(() => {
     try {
