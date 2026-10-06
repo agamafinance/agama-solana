@@ -5,3 +5,4 @@ dist/
 .cre_build_tmp.*
 *.bak
 project.local.yaml
+config.local.json

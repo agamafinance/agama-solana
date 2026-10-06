@@ -3,6 +3,9 @@
 // Every minute, each node of the DON reads the same public sources:
 //   - Jupiter's price API for the xStocks on Solana mainnet: the token's own
 //     24/7 price and the underlying share's last price
+//   - DexScreener, the deepest USDC pair of each xStock (Raydium, Meteora...):
+//     a second, independent price for the token. If the two disagree by more
+//     than 2%, the market is skipped this run rather than priced off one
 //   - Orca's GLDY/USDC whirlpool (Streamex's gold-backed token, ~1 oz each)
 //     and the gold spot price, as a guard on a thin pool
 // The DON agrees on the median of every field, decides on its own clock whether
@@ -41,6 +44,10 @@ const gold = z.object({ symbol: z.string().max(8), kind: z.literal('gold'), orca
 const configSchema = z.object({
 	schedule: z.string(),
 	jupiterUrl: z.string(),
+	/** Second, independent source for the xStock tokens: DEX pairs (Raydium, Meteora...). */
+	dexscreenerUrl: z.string(),
+	/** Two token sources further apart than this and the market is skipped this run. */
+	sourceMaxDeviationBps: z.number(),
 	/** Mainnet RPC: the GLDY price is read straight from Orca's whirlpool account. */
 	mainnetRpc: z.string(),
 	goldSpotUrl: z.string(),
@@ -150,6 +157,7 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 		out[`${m.symbol}_a`] = 0
 		out[`${m.symbol}_b`] = 0
 		out[`${m.symbol}_t`] = 0
+		out[`${m.symbol}_d`] = 0
 	}
 	// Each source on its own: one failing must not take the others down.
 	if (xs.length) {
@@ -161,6 +169,25 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 				out[`${m.symbol}_a`] = Number(q.usdPrice) || 0 // the token, 24/7
 				out[`${m.symbol}_b`] = Number(q.stockData?.price) || 0 // the share
 				out[`${m.symbol}_t`] = q.stockData?.updatedAt ? Math.floor(Date.parse(q.stockData.updatedAt) / 1000) : 0
+			}
+		} catch {}
+	}
+	if (xs.length) {
+		try {
+			// The deepest USDC pair per token, from DexScreener (no API key).
+			const pairs = get(req, `${config.dexscreenerUrl}/${xs.map((m) => m.mint).join(',')}`) as any[]
+			for (const m of xs) {
+				let best = 0
+				let liq = 0
+				for (const p of pairs) {
+					if (p.baseToken?.address !== m.mint || p.quoteToken?.symbol !== 'USDC') continue
+					const l = Number(p.liquidity?.usd) || 0
+					if (l > liq) {
+						liq = l
+						best = Number(p.priceUsd) || 0
+					}
+				}
+				out[`${m.symbol}_d`] = best
 			}
 		} catch {}
 	}
@@ -186,16 +213,35 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 // The DON's decision, from the agreed observation.
 // ---------------------------------------------------------------------------
 
-function decide(config: Config, obs: Observation, now: Date): { symbol: string; price: number; open: boolean; source: string }[] {
+function decide(config: Config, obs: Observation, now: Date, skipped: string[]): { symbol: string; price: number; open: boolean; source: string }[] {
 	const nowS = Math.floor(now.getTime() / 1000)
 	const out = []
 	for (const m of config.markets) {
 		const a = obs[`${m.symbol}_a`]
 		const b = obs[`${m.symbol}_b`]
 		if (m.kind === 'xstock') {
+			// The token's price from two independent sources: Jupiter and the
+			// deepest DEX pair. Apart by more than the band, nobody is trusted
+			// this run and the market keeps its last price.
+			const d = obs[`${m.symbol}_d`]
+			let token = 0
+			let tokenSource = ''
+			if (a > 0 && d > 0) {
+				if (Math.abs(a / d - 1) * 10_000 > config.sourceMaxDeviationBps) {
+					skipped.push(`${m.symbol}: Jupiter ${a.toFixed(2)} vs DEX ${d.toFixed(2)}`)
+					continue
+				}
+				token = (a + d) / 2
+				tokenSource = 'Jupiter + DEX'
+			} else if (a > 0 || d > 0) {
+				token = a > 0 ? a : d
+				tokenSource = a > 0 ? 'Jupiter only' : 'DEX only'
+			} else continue
 			const shareFresh = b > 0 && nowS - obs[`${m.symbol}_t`] < config.shareMaxAge
-			if (nyseOpen(now) && shareFresh) out.push({ symbol: m.symbol, price: b, open: true, source: 'share' })
-			else if (a > 0) out.push({ symbol: m.symbol, price: a, open: false, source: 'xStock token' })
+			// In session the share price leads, as long as the token agrees with it.
+			const shareAgrees = shareFresh && Math.abs(b / token - 1) * 10_000 <= 3 * config.sourceMaxDeviationBps / 2
+			if (nyseOpen(now) && shareAgrees) out.push({ symbol: m.symbol, price: b, open: true, source: `share, token ${tokenSource}` })
+			else out.push({ symbol: m.symbol, price: token, open: false, source: `token, ${tokenSource}` })
 		} else {
 			const open = goldOpen(now)
 			const near = a > 0 && b > 0 && Math.abs(a / b - 1) * 10_000 <= config.goldMaxDeviationBps
@@ -222,7 +268,7 @@ const onCron = (runtime: Runtime<Config>) => {
 	const now = runtime.now()
 
 	const fields = Object.fromEntries(
-		config.markets.flatMap((m) => ['a', 'b', 't'].map((k) => [`${m.symbol}_${k}`, median<number>])),
+		config.markets.flatMap((m) => ['a', 'b', 't', 'd'].map((k) => [`${m.symbol}_${k}`, median<number>])),
 	)
 	let obs: Observation
 	try {
@@ -234,7 +280,9 @@ const onCron = (runtime: Runtime<Config>) => {
 		throw e
 	}
 
-	const decided = decide(config, obs, now)
+	const skipped: string[] = []
+	const decided = decide(config, obs, now, skipped)
+	for (const s of skipped) runtime.log(`skipped, sources disagree: ${s}`)
 	for (const d of decided) runtime.log(`${d.symbol.padEnd(5)} ${d.price.toFixed(2)} ${d.open ? 'in session' : 'off hours'} (${d.source})`)
 
 	const network = getNetwork({ chainFamily: 'solana', chainSelectorName: sol.chainSelectorName, isTestnet: true })

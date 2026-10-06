@@ -1,0 +1,17 @@
+{
+  "schedule": "30 * * * * *",
+  "rpcUrl": "https://api.devnet.solana.com",
+  "programId": "6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D",
+  "markets": [
+    "TSLA",
+    "NVDA",
+    "AAPL",
+    "SPY",
+    "QQQ",
+    "GOOGL",
+    "MSFT",
+    "AMZN",
+    "META",
+    "GLDY"
+  ]
+}

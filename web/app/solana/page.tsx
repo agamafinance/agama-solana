@@ -241,8 +241,8 @@ export default function SolanaEarnPage() {
                   }
                 >
                   The stock moves, the debt follows it back to {pct(position!.targetLtvBps)}. The vault yield above
-                  that debt is bought back as more stock. Nothing here is yours to do, and nothing here is ours to
-                  control: the calls are open to anyone.
+                  that debt is bought back as more stock. A Chainlink CRE workflow makes the calls every minute, and the
+                  calls are open to anyone: nothing here is yours to do, and nothing here is ours to control.
                 </AgentsCard>
                 <ReturnPrivately checked={backPrivate} onChange={setBackPrivate} what="the stock and any USDC left over" />
                 <button onClick={close} disabled={busy} className={`mt-4 ${secondaryBtn}`}>

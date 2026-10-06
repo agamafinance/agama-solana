@@ -104,15 +104,19 @@ to pass the exact swap amount and calldata, with an on-chain slippage floor
 against griefing; here the swap is priced inside the instruction off the same
 oracle, so an agent has nothing to choose and nothing to skim.
 
-## Chainlink CRE: the price layer
+## Chainlink CRE: prices and agents
 
-`cre/agama-prices` is a Chainlink Runtime Environment workflow, and the program
-is its receiver.
+Two Chainlink Runtime Environment workflows run the protocol. `agama-prices`
+prices the markets; `agama-agents` runs the agents. No keeper is left.
+
+### agama-prices
 
 ```
 cron, every minute
   each DON node, over HTTP:
     Jupiter price API   the 9 xStocks: the token's own price and the share's
+    DexScreener         the deepest USDC pair of each xStock: a second,
+                        independent token price (Raydium, Meteora...)
     Solana mainnet RPC  Orca's GLDY/USDC whirlpool account, sqrt_price at offset 65
     gold spot           a guard on that thin pool (3% band)
   consensus             median of every field across the nodes
@@ -121,6 +125,15 @@ cron, every minute
     -> Keystone Forwarder -> agama.on_report -> markets priced
 ```
 
+- **No single source decides.** An xStock's token price needs Jupiter and the
+  DEX pair to agree within 2% (then their mean), or comes from the one that
+  answered; if they disagree, the market is skipped this run and keeps its
+  last price. In session the share price leads only while it is within 3% of
+  that token price. GLDY needs the Orca pool within 3% of gold spot, or falls
+  back to spot.
+- **Chainlink Data Streams next.** Chainlink publishes US equities streams on
+  Solana; access is requested. The workflow will fetch them as the primary
+  price, with the current sources as the cross-check.
 - **The receiver checks who is calling.** `on_report` requires the configured
   forwarder state, the forwarder's authority PDA for this program as signer,
   and, once set, the workflow owner from the report metadata. Then it decodes
@@ -153,8 +166,30 @@ cron, every minute
   `cre/simulate-local.sh` runs the whole workflow against a local validator
   with the forwarder cloned in.
 
-The keeper now runs the agents only (`--agents-only`); its `push_price` stays
-as the fallback path, bounded the same way.
+### agama-agents
+
+```
+cron, every minute (at :30)
+  each DON node, over HTTP:
+    getProgramAccounts   every Agama position (confirmed, so new ones count)
+    for each position    build compound (Earn) and rebalance, sign with the
+                         agent key from CRE secrets, sendTransaction
+    RPC preflight        AlreadyOnTarget / NothingToCompound refused for free
+  consensus              median of positions, acted, on target, failed
+```
+
+- **Why not a report through the forwarder.** An agent action needs ten
+  accounts; a CRE Solana write has no address lookup tables yet and leaves
+  about 265 bytes once accounts are paid. The instructions are permissionless,
+  so the workflow simply is one of the signers anyone could be.
+- **Under the DON** every node sends its own signed copy: the first to land
+  acts, the others fail preflight because the position is on target by then.
+- The agent key only pays fees; positions record it as `last_agent`, which
+  the app shows. Checked end to end in `cre/simulate-local.sh`: a position at
+  20%, TSLA up 10%, one workflow run, the CRE agent key borrowed the difference.
+
+The old keeper (`scripts/keeper.ts`) stays as a fallback that anyone can run,
+and `push_price` as a fallback price path, bounded the same way.
 
 ## Confidential balances
 
@@ -238,8 +273,9 @@ pnpm e2e:local                    # throwaway validator: setup, the e2e, the age
                                   # the real keeper with prices moved on purpose (17 checks),
                                   # then the private path (12 checks). VALIDATOR=agave 4.3+
 pnpm state                        # live pool, vault, prices and their age, positions, keeper
-pnpm keeper --agents-only         # the agents, every 30 s
 ./cre/run-devnet.sh               # one run of the CRE price workflow on devnet
+./cre/run-devnet.sh agama-agents  # one run of the CRE agents workflow
+pnpm keeper                       # fallback keeper, if CRE is down
 VALIDATOR=... ./cre/simulate-local.sh  # the workflow against a local validator
 ```
 

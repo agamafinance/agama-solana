@@ -128,8 +128,9 @@ export function CreBadge({ cre }: { cre: { simulation: boolean; reports: number;
         Priced by Chainlink CRE
       </span>
       <span>
-        Every minute the DON reads the xStocks on Jupiter and Orca&apos;s GLDY pool, agrees on the medians and writes a
-        signed report. Last report {ageText}, {cre.reports.toLocaleString('en-US')} so far
+        Every minute the DON reads each xStock from two independent sources (Jupiter and the deepest DEX pair) and GLDY
+        off Orca&apos;s pool, skips a market whose sources disagree, and writes a signed report. A second workflow runs
+        the agents. Last report {ageText}, {cre.reports.toLocaleString('en-US')} so far
         {cre.simulation ? ', relayed by the CRE simulator through Chainlink\'s devnet mock forwarder.' : ', through the Keystone Forwarder.'}
       </span>
     </div>

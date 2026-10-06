@@ -202,7 +202,7 @@ export default function SolanaAmplifyPage() {
                   }
                 >
                   The price rises, the agents borrow and buy more stock; it falls, they sell just enough to repay. The
-                  multiple stays where you set it, and anyone can make the call.
+                  multiple stays where you set it. A Chainlink CRE workflow makes the calls every minute, and anyone else can too.
                 </AgentsCard>
                 <ReturnPrivately checked={backPrivate} onChange={setBackPrivate} what="the stock" />
                 <button

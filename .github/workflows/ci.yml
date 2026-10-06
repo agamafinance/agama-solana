@@ -69,3 +69,4 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: cd contracts && bun install
       - run: cd agama-prices && bun install && bunx tsc --noEmit
+      - run: cd agama-agents && bun install && bunx tsc --noEmit
