@@ -2,7 +2,9 @@
 
 import { useState } from 'react';
 
-import { USDC_DECIMALS } from '@/lib/solana/config';
+import { lpMint, USDC_DECIMALS, usdcMint } from '@/lib/solana/config';
+import { usePrivate } from '@/lib/solana/PrivateContext';
+import { FromPrivateNote, ReturnPrivately } from '@/components/solana/private';
 import { useSolanaWallet } from '@/lib/solana/WalletProvider';
 import {
   borrowRateBps, errorText, ix, pct, send, supplyRateBps, totalAssets, totalDebt, usd, useSnapshot, utilizationBps,
@@ -17,15 +19,25 @@ export default function SolanaLendPage() {
   const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ text: string; sig?: string }>();
+  const priv = usePrivate();
+  const [backPrivate, setBackPrivate] = useState(true);
 
   const amt = parseAmount(amount, USDC_DECIMALS);
   const assets = p ? totalAssets(p) : 0n;
   // One LP token is a claim on the pool's cash plus what borrowers owe it.
   const lpValue = (lp: bigint) => (p && p.lpSupply > 0n ? (lp * assets) / p.lpSupply : 0n);
   const lpFor = (usdc: bigint) => (p && assets > 0n ? (usdc * p.lpSupply) / assets : usdc);
-  const mine = snap ? lpValue(snap.lp) : 0n;
-  const balance = mode === 'supply' ? snap?.usdc ?? 0n : mine;
+  // Public and private both count; what the public side lacks is unshielded first.
+  const privUsdc = priv.privateOf(usdcMint);
+  const privLp = priv.privateOf(lpMint);
+  const pubLp = snap?.lp ?? 0n;
+  const allLp = pubLp + privLp;
+  const mine = snap ? lpValue(allLp) : 0n;
+  const balance = mode === 'supply' ? (snap?.usdc ?? 0n) + privUsdc : mine;
   const tooMuch = amt > balance || (mode === 'withdraw' && p !== undefined && amt > p.cash);
+  const lpArg = amt >= mine ? allLp : lpFor(amt);
+  const fromPrivate =
+    mode === 'supply' ? (amt > (snap?.usdc ?? 0n) ? amt - (snap?.usdc ?? 0n) : 0n) : lpArg > pubLp ? lpArg - pubLp : 0n;
 
   async function submit() {
     if (!address || !provider || !snap) return;
@@ -33,9 +45,21 @@ export default function SolanaLendPage() {
     setStatus({ text: mode === 'supply' ? 'Supplying...' : 'Withdrawing...' });
     try {
       // Withdraw takes LP tokens: the max is exact, anything else is converted.
-      const arg = mode === 'supply' ? amt : amt >= mine ? snap.lp : lpFor(amt);
-      const sig = await send(provider, address, [await ix.lend(address, mode, arg)]);
-      setStatus({ text: 'Done.', sig });
+      const arg = mode === 'supply' ? amt : lpArg;
+      const shieldAfter = priv.unlocked && backPrivate;
+      if (fromPrivate > 0n || shieldAfter) {
+        const sigs = await priv.execute({
+          unshield: fromPrivate > 0n ? { mint: mode === 'supply' ? usdcMint : lpMint, amount: fromPrivate } : undefined,
+          ixs: async () => [await ix.lend(address, mode, arg)],
+          // Supplying mints LP tokens, withdrawing pays USDC: keep whichever came back private.
+          shieldAfter: shieldAfter ? [mode === 'supply' ? lpMint : usdcMint] : undefined,
+          progress: (text) => setStatus({ text }),
+        });
+        setStatus({ text: `Done. ${sigs.length} transactions.`, sig: sigs[sigs.length - 1] });
+      } else {
+        const sig = await send(provider, address, [await ix.lend(address, mode, arg)]);
+        setStatus({ text: 'Done.', sig });
+      }
       setAmount('');
       refresh();
     } catch (e) {
@@ -89,8 +113,20 @@ export default function SolanaLendPage() {
               disabled={busy || (!!address && (amt === 0n || tooMuch))}
               className={`mt-4 ${primaryBtn}`}
             >
-              {!address ? 'Connect Wallet' : busy ? status?.text : mode === 'supply' ? 'Supply USDC' : 'Withdraw USDC'}
+              {!address
+                ? 'Connect Wallet'
+                : busy
+                  ? status?.text
+                  : `${fromPrivate > 0n ? 'Unshield and ' + mode : mode === 'supply' ? 'Supply' : 'Withdraw'} USDC`}
             </button>
+            {fromPrivate > 0n && !tooMuch && (
+              <FromPrivateNote amount={usd(fromPrivate).replace('$', '')} label={mode === 'supply' ? 'USDC' : 'LP'} />
+            )}
+            <ReturnPrivately
+              checked={backPrivate}
+              onChange={setBackPrivate}
+              what={mode === 'supply' ? 'the LP token you receive' : 'the USDC you withdraw'}
+            />
             {!busy && status && <Status text={status.text} sig={status.sig} />}
           </div>
           <div className={card}>

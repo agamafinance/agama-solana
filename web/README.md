@@ -33,6 +33,16 @@ The stocks and USDC are stand-ins minted by the program. Prices are relayed by t
 xStocks through Jupiter: the share price while NYSE trades, the token's own price outside it, when LTVs
 drop by the 5% off-hours buffer. Swaps settle at that price minus 5 bps.
 
+## Private balances
+
+Every Agama mint is Token-2022 with confidential transfers. The Private tab (`/solana/private`) unlocks
+the wallet's keys with one signature over `solana-conf-bal/v1` (kept in memory only), shows public and
+decrypted private balances, and shields, unshields and sends privately. Earn, Amplify and Lend can take
+what the public balance lacks out of the private one ("Unshield and deposit") and put what comes back
+into it ("Return it to my private balance"). Proofs are built in the browser with `@solana/zk-sdk` and
+every action is one wallet approval, even when it is 4 or 5 transactions. Entering or leaving the
+protocol reveals the amount; positions are public program state.
+
 ## Run it
 
 ```bash
@@ -44,4 +54,9 @@ NEXT_PUBLIC_ASSET_PREFIX=...      # when served behind a rewrite
 
 # A headless browser with an injected throwaway wallet: faucet, Earn open, every tab, Earn close.
 PLAYWRIGHT_PATH=/path/to/node_modules/playwright CHROME_PATH=/path/to/chromium node scripts/ui-e2e.mjs
+
+# The private run: unlock, shield, private send to a second wallet (decrypted on its side), Unshield and
+# deposit into Earn, close back into the private balance, Unshield and supply. Needs a validator whose ZK
+# ElGamal program takes the zk-sdk proofs (agave 4.3; 3.1 rejects them) and the devnet Token-2022.
+PRIVATE=1 FUND_SOL=2 SOLANA_RPC=http://127.0.0.1:8899 node scripts/ui-e2e.mjs http://127.0.0.1:3032
 ```

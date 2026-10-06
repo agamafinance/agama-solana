@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from 'react';
 
-import { asset, AGENT_OPS, BPS, STOCK_DECIMALS } from '@/lib/solana/config';
+import { asset, AGENT_OPS, BPS, STOCK_DECIMALS, usdcMint } from '@/lib/solana/config';
+import { usePrivate } from '@/lib/solana/PrivateContext';
+import { FromPrivateNote, ReturnPrivately } from '@/components/solana/private';
 import { useSolanaWallet } from '@/lib/solana/WalletProvider';
 import {
   ago, borrowRateBps, errorText, ix, pct, px, qty, send, stockValue, usd, useSnapshot,
@@ -15,6 +17,8 @@ import {
 export default function SolanaEarnPage() {
   const { address, provider, connect } = useSolanaWallet();
   const { snap, error, refresh } = useSnapshot(address);
+  const priv = usePrivate();
+  const [backPrivate, setBackPrivate] = useState(true);
   const [sel, setSel] = useState(0);
   const m = snap?.markets[sel];
   const position = snap?.earn[sel];
@@ -33,19 +37,41 @@ export default function SolanaEarnPage() {
   useEffect(() => setPicked(undefined), [sel]);
 
   const amt = parseAmount(amount, STOCK_DECIMALS);
+  // Public first; whatever the public balance lacks comes out of the private one.
+  const privBal = m ? priv.privateOf(m.stock.stockMint) : 0n;
+  const pub = m?.balance ?? 0n;
+  const fromPrivate = amt > pub ? amt - pub : 0n;
+  const enough = amt <= pub + privBal;
   const borrowed = m ? (stockValue(amt, m.priceE8) * BigInt(ltv)) / BPS : 0n;
   const borrowRate = p ? borrowRateBps(p) : undefined;
   const spread = p && borrowRate !== undefined ? p.vaultAprBps - borrowRate : undefined;
   const extra = spread !== undefined ? (spread * BigInt(ltv)) / BPS : undefined;
   const healthAtOpen = m && ltv > 0 ? (Number(m.threshold) / ltv).toFixed(2) : '-';
 
-  async function run(where: 'deposit' | 'close' | 'slider', build: () => Promise<Parameters<typeof send>[2]>, msg: string) {
+  async function run(
+    where: 'deposit' | 'close' | 'slider',
+    build: () => Promise<Parameters<typeof send>[2]>,
+    msg: string,
+    privacy?: { unshield?: bigint; shieldAfter?: boolean },
+  ) {
     if (!address || !provider) return;
     setBusy(true);
     setStatus({ text: msg, where });
     try {
-      const sig = await send(provider, address, await build());
-      setStatus({ text: 'Done.', sig, where });
+      let sig: string;
+      if (privacy && (privacy.unshield || privacy.shieldAfter)) {
+        const sigs = await priv.execute({
+          unshield: privacy.unshield ? { mint: m!.stock.stockMint, amount: privacy.unshield } : undefined,
+          ixs: build,
+          shieldAfter: privacy.shieldAfter ? [m!.stock.stockMint, usdcMint] : undefined,
+          progress: (text) => setStatus({ text, where }),
+        });
+        sig = sigs[sigs.length - 1];
+        setStatus({ text: `Done. ${sigs.length} transactions.`, sig, where });
+      } else {
+        sig = await send(provider, address, await build());
+        setStatus({ text: 'Done.', sig, where });
+      }
       if (where === 'deposit') setAmount('');
       refresh();
     } catch (e) {
@@ -56,8 +82,13 @@ export default function SolanaEarnPage() {
   }
 
   const deposit = () =>
-    run('deposit', async () => [await ix.earnDeposit(address!, m!.stock, amt, ltv)], 'Depositing and borrowing...');
-  const close = () => run('close', async () => [await ix.earnClose(address!, m!.stock)], 'Closing...');
+    run('deposit', async () => [await ix.earnDeposit(address!, m!.stock, amt, ltv)], 'Depositing and borrowing...', {
+      unshield: fromPrivate,
+    });
+  const close = () =>
+    run('close', async () => [await ix.earnClose(address!, m!.stock)], 'Closing...', {
+      shieldAfter: priv.unlocked && backPrivate,
+    });
   const moveSlider = () =>
     run('slider', async () => [await ix.earnSetTarget(address!, m!.stock, ltv)], 'Moving the position...');
 
@@ -103,8 +134,8 @@ export default function SolanaEarnPage() {
 
             <AmountBox
               label="Deposit"
-              balanceLabel={qty(m?.balance)}
-              onMax={() => m && setAmount(toDecimal(m.balance, STOCK_DECIMALS))}
+              balanceLabel={privBal > 0n ? `${qty(m?.balance)} + ${qty(privBal)} private` : qty(m?.balance)}
+              onMax={() => m && setAmount(toDecimal(m.balance + privBal, STOCK_DECIMALS))}
               value={amount}
               onChange={setAmount}
               unit={m?.stock.ticker ?? ''}
@@ -149,19 +180,22 @@ export default function SolanaEarnPage() {
 
             <button
               onClick={address ? deposit : () => connect()}
-              disabled={busy || (!!address && (amt === 0n || !m || amt > m.balance || ltv === 0))}
+              disabled={busy || (!!address && (amt === 0n || !m || !enough || ltv === 0))}
               className={`mt-4 ${primaryBtn}`}
             >
               {!address
                 ? 'Connect Wallet'
                 : busy && status?.where === 'deposit'
                   ? status.text
-                  : m && amt > m.balance
+                  : m && !enough
                     ? `Not enough ${m.stock.ticker}, see the Faucet`
-                    : has
+                    : fromPrivate > 0n
+                      ? 'Unshield and deposit'
+                      : has
                       ? 'Add to the position'
                       : 'Deposit and start earning'}
             </button>
+            {fromPrivate > 0n && enough && <FromPrivateNote amount={qty(fromPrivate)} label={m?.stock.ticker ?? ''} />}
             {!busy && status?.where === 'deposit' && <Status text={status.text} sig={status.sig} />}
           </div>
 
@@ -209,6 +243,7 @@ export default function SolanaEarnPage() {
                   that debt is bought back as more stock. Nothing here is yours to do, and nothing here is ours to
                   control: the calls are open to anyone.
                 </AgentsCard>
+                <ReturnPrivately checked={backPrivate} onChange={setBackPrivate} what="the stock and any USDC left over" />
                 <button onClick={close} disabled={busy} className={`mt-4 ${secondaryBtn}`}>
                   {busy && status?.where === 'close' ? status.text : 'Close, get the stock back'}
                 </button>

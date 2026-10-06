@@ -12,6 +12,7 @@ const NAV: Record<Platform, { href: string; label: string }[]> = {
     { href: '/solana', label: 'Earn' },
     { href: '/solana/amplify', label: 'Amplify' },
     { href: '/solana/lend', label: 'Lend' },
+    { href: '/solana/private', label: 'Private' },
     { href: '/solana/faucet', label: 'Faucet' },
   ],
 };

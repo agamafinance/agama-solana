@@ -1,5 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
-import { getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from '@solana/spl-token';
 
 import idl from './idl.json';
 
@@ -24,11 +24,11 @@ export const FAUCET_STOCK = 10n * 100_000_000n;
 const enc = (s: string) => new TextEncoder().encode(s);
 const pda = (...seeds: Uint8Array[]) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 
-export const protocolPda = pda(enc('protocol'));
-export const usdcMint = pda(enc('usdc'));
-export const lpMint = pda(enc('lp'));
-export const poolUsdc = pda(enc('pool_usdc'));
-export const vaultUsdc = pda(enc('vault_usdc'));
+export const protocolPda = pda(enc('protocol.v2'));
+export const usdcMint = pda(enc('usdc.v2'));
+export const lpMint = pda(enc('lp.v2'));
+export const poolUsdc = pda(enc('pool_usdc.v2'));
+export const vaultUsdc = pda(enc('vault_usdc.v2'));
 
 function symbolBytes(sym: string): Uint8Array {
   const b = new Uint8Array(8);
@@ -52,18 +52,21 @@ export const STOCKS: Stock[] = [
   ['AAPL', 'Apple'],
   ['SPY', 'S&P 500 ETF'],
 ].map(([symbol, name]) => {
-  const stockMint = pda(enc('stock'), symbolBytes(symbol));
-  const market = pda(enc('market'), stockMint.toBytes());
-  const custody = pda(enc('custody'), market.toBytes());
+  const stockMint = pda(enc('stock.v2'), symbolBytes(symbol));
+  const market = pda(enc('market.v2'), stockMint.toBytes());
+  const custody = pda(enc('custody.v2'), market.toBytes());
   return { symbol, ticker: `${symbol}x`, name, stockMint, market, custody };
 });
 
 export type Kind = 'earn' | 'amplify';
 
 export const positionPda = (owner: PublicKey, market: PublicKey, kind: Kind) =>
-  pda(enc('position'), owner.toBytes(), market.toBytes(), enc(kind));
+  pda(enc('position.v2'), owner.toBytes(), market.toBytes(), enc(kind));
 
-export const ata = (owner: PublicKey, mint: PublicKey) => getAssociatedTokenAddressSync(mint, owner);
+/// Every Agama mint is Token-2022, with the confidential transfer extension.
+export const TOKEN_PROGRAM = TOKEN_2022_PROGRAM_ID;
+export const ata = (owner: PublicKey, mint: PublicKey) =>
+  getAssociatedTokenAddressSync(mint, owner, true, TOKEN_2022_PROGRAM_ID);
 
 /// What an agent last did to a position, as the program records it.
 export const AGENT_OPS: Record<number, string> = {
