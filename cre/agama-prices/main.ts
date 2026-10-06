@@ -46,7 +46,13 @@ const enc = (s: string) => new TextEncoder().encode(s)
 
 const streams = z.object({ regular: z.string(), extended: z.string(), overnight: z.string() })
 const xstock = z.object({ symbol: z.string().max(8), kind: z.literal('xstock'), mint: z.string(), streams: streams.optional() })
-const gold = z.object({ symbol: z.string().max(8), kind: z.literal('gold'), orcaPool: z.string() })
+const gold = z.object({
+	symbol: z.string().max(8),
+	kind: z.literal('gold'),
+	orcaPool: z.string(),
+	// Data Streams XAU/USDT and USDT/USD: the gold reference once the credentials cover them.
+	streams: z.object({ xau: z.string(), usdt: z.string() }).optional(),
+})
 
 const configSchema = z.object({
 	schedule: z.string(),
@@ -169,6 +175,26 @@ function decodeV11(hex: string): { mid: number; status: number; at: number } {
 	return { mid: Number(mid / 10n ** 10n) / 1e8, status: Number(word(blobOff, 13)), at: Number(word(blobOff, 2)) }
 }
 
+/** One signed bulk request to the Data Streams API (HMAC-SHA256 over method,
+ *  path, body hash, key and time). Raw reports by feed ID; empty on any error
+ *  (a feed the credentials do not cover makes the whole request 401). */
+const dsBulk = (req: HTTPSendRequester, config: Config, ds: DsCreds, ids: string[]): Map<string, string> => {
+	const path = `/api/v1/reports/bulk?feedIDs=${ids.join(',')}&timestamp=${Math.floor(ds.nowMs / 1000) - 2}`
+	const toSign = `GET ${path} ${bytesToHex(sha256(new Uint8Array()))} ${ds.key} ${ds.nowMs}`
+	const signature = bytesToHex(hmac(sha256, enc(ds.secret), enc(toSign)))
+	const resp = req
+		.sendRequest({
+			url: config.dataStreamsUrl + path,
+			method: 'GET' as const,
+			headers: { Authorization: ds.key, 'X-Authorization-Timestamp': String(ds.nowMs), 'X-Authorization-Signature-SHA256': signature },
+		})
+		.result()
+	const out = new Map<string, string>()
+	if (resp.statusCode !== 200) return out
+	for (const r of JSON.parse(new TextDecoder().decode(resp.body)).reports ?? []) out.set(String(r.feedID).toLowerCase(), r.fullReport)
+	return out
+}
+
 const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observation => {
 	const out: Observation = {}
 	const xs = config.markets.filter((m) => m.kind === 'xstock')
@@ -190,30 +216,18 @@ const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observati
 	if (streamed.length && ds.key) {
 		try {
 			const ids = streamed.flatMap((m) => [m.streams!.regular, m.streams!.extended, m.streams!.overnight])
-			const path = `/api/v1/reports/bulk?feedIDs=${ids.join(',')}&timestamp=${Math.floor(ds.nowMs / 1000) - 2}`
-			const toSign = `GET ${path} ${bytesToHex(sha256(new Uint8Array()))} ${ds.key} ${ds.nowMs}`
-			const signature = bytesToHex(hmac(sha256, enc(ds.secret), enc(toSign)))
-			const resp = req
-				.sendRequest({
-					url: config.dataStreamsUrl + path,
-					method: 'GET' as const,
-					headers: { Authorization: ds.key, 'X-Authorization-Timestamp': String(ds.nowMs), 'X-Authorization-Signature-SHA256': signature },
-				})
-				.result()
-			if (resp.statusCode === 200) {
-				const byId = new Map<string, { mid: number; status: number; at: number }>()
-				for (const r of JSON.parse(new TextDecoder().decode(resp.body)).reports ?? []) byId.set(String(r.feedID).toLowerCase(), decodeV11(r.fullReport))
-				for (const m of streamed) {
-					const reg = byId.get(m.streams!.regular.toLowerCase())
-					const ext = byId.get(m.streams!.extended.toLowerCase())
-					const ovn = byId.get(m.streams!.overnight.toLowerCase())
-					// marketStatus says which session is live; never the timestamps.
-					const live = reg && reg.status === 2 ? reg : ext && (ext.status === 1 || ext.status === 3) ? ext : ovn && ovn.status === 4 ? ovn : undefined
-					if (live && live.mid > 0) {
-						out[`${m.symbol}_s`] = live.mid
-						out[`${m.symbol}_ss`] = live.status
-						out[`${m.symbol}_st`] = live.at
-					}
+			const raw = dsBulk(req, config, ds, ids)
+			const byId = new Map([...raw].map(([k, v]) => [k, decodeV11(v)]))
+			for (const m of streamed) {
+				const reg = byId.get(m.streams!.regular.toLowerCase())
+				const ext = byId.get(m.streams!.extended.toLowerCase())
+				const ovn = byId.get(m.streams!.overnight.toLowerCase())
+				// marketStatus says which session is live; never the timestamps.
+				const live = reg && reg.status === 2 ? reg : ext && (ext.status === 1 || ext.status === 3) ? ext : ovn && ovn.status === 4 ? ovn : undefined
+				if (live && live.mid > 0) {
+					out[`${m.symbol}_s`] = live.mid
+					out[`${m.symbol}_ss`] = live.status
+					out[`${m.symbol}_st`] = live.at
 				}
 			}
 		} catch {}
@@ -247,6 +261,24 @@ const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observati
 					}
 				}
 				out[`${m.symbol}_d`] = best
+			}
+		} catch {}
+	}
+	const goldStreamed = config.markets.flatMap((m) => (m.kind === 'gold' && m.streams ? [m] : []))
+	if (goldStreamed.length && ds.key) {
+		try {
+			const raw = dsBulk(req, config, ds, goldStreamed.flatMap((m) => [m.streams!.xau, m.streams!.usdt]))
+			for (const m of goldStreamed) {
+				const xau = raw.get(m.streams!.xau.toLowerCase())
+				const usdt = raw.get(m.streams!.usdt.toLowerCase())
+				if (!xau || !usdt) continue
+				// v3 reports: benchmarkPrice sits in the word v11 uses for mid.
+				const x = decodeV11(xau)
+				const u = decodeV11(usdt)
+				if (x.mid > 0 && u.mid > 0) {
+					out[`${m.symbol}_s`] = x.mid * u.mid
+					out[`${m.symbol}_st`] = Math.min(x.at, u.at)
+				}
 			}
 		} catch {}
 	}
@@ -327,6 +359,13 @@ function decide(config: Config, obs: Observation, now: Date, skipped: string[]):
 			else out.push({ symbol: m.symbol, price: token, open: false, source: `token, ${tokenSource}`, at: nowS })
 		} else {
 			const open = goldOpen(now)
+			// The gold reference: Data Streams XAU/USD when available, else gold spot.
+			const sp = seen(`${m.symbol}_s`) ? obs[`${m.symbol}_s`] : 0
+			if (sp > 0) {
+				const ok = a > 0 && Math.abs(a / sp - 1) * 10_000 <= config.goldMaxDeviationBps
+				out.push({ symbol: m.symbol, price: ok ? a : sp, open, source: ok ? 'Orca pool, Data Streams XAU' : 'Data Streams XAU/USD', at: ok ? nowS : Math.min(nowS, Math.round(obs[`${m.symbol}_st`])) })
+				continue
+			}
 			const near = a > 0 && b > 0 && Math.abs(a / b - 1) * 10_000 <= config.goldMaxDeviationBps
 			const spotAt = obs[`${m.symbol}_g`] > 0 ? Math.min(nowS, obs[`${m.symbol}_g`]) : nowS
 			if (near) out.push({ symbol: m.symbol, price: a, open, source: 'Orca pool', at: nowS })
