@@ -8,7 +8,9 @@
     "e2e": "tsx scripts/e2e.ts",
     "state": "tsx scripts/state.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "idl": "anchor build && cp target/idl/agama_solana.json target/types/agama_solana.ts idl/"
+    "idl": "anchor build && cp target/idl/agama_solana.json target/types/agama_solana.ts idl/",
+    "e2e:local": "./scripts/e2e-local.sh",
+    "agents-e2e": "tsx scripts/agents-e2e.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.32.1",

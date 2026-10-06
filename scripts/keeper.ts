@@ -9,6 +9,7 @@
 //
 //   pnpm keeper            loop forever
 //   pnpm keeper --once     one tick, then exit
+//   --agents-only          skip the price half (anyone can run this)
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -88,9 +89,11 @@ async function runAgents() {
   }
 }
 
+const AGENTS_ONLY = process.argv.includes("--agents-only");
+
 async function tick() {
   try {
-    await pushPrices();
+    if (!AGENTS_ONLY) await pushPrices();
   } catch (e: any) {
     log("prices:", e.message);
   }

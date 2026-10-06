@@ -136,6 +136,9 @@ cargo test                        # 10 LiteSVM flows against the built program, 
 pnpm install
 pnpm setup                        # initialize, 4 markets, first prices, seed the pool (idempotent)
 pnpm e2e                          # 9 real transactions on devnet from a fresh wallet
+pnpm e2e:local                    # throwaway validator: setup, the e2e, then the agents
+                                  # through the real keeper with prices moved on purpose (17 checks)
+pnpm state                        # live pool, vault, prices and their age, positions, keeper
 pnpm keeper                       # prices + agents, every 30 s
 ```
 

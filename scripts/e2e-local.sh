@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Everything end to end on a throwaway local validator: setup, the user e2e,
+# then the agents through the real keeper process with prices moved on purpose.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+LEDGER=$(mktemp -d)
+ADMIN="$LEDGER/admin.json"
+solana-keygen new --no-bip39-passphrase -s -o "$ADMIN" >/dev/null
+
+solana-test-validator --reset --quiet --ledger "$LEDGER/ledger" \
+  --bpf-program 6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D target/deploy/agama_solana.so &
+VALIDATOR=$!
+trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$LEDGER"' EXIT
+
+export SOLANA_RPC=http://127.0.0.1:8899
+until solana -u "$SOLANA_RPC" cluster-version >/dev/null 2>&1; do sleep 1; done
+solana -u "$SOLANA_RPC" airdrop 100 "$(solana-keygen pubkey "$ADMIN")" >/dev/null
+
+export ANCHOR_WALLET="$ADMIN"
+echo "== setup"
+./node_modules/.bin/tsx scripts/setup.ts 2>&1 | grep -v "punycode\|trace-deprecation\|bigint"
+echo "== user e2e"
+./node_modules/.bin/tsx scripts/e2e.ts 2>&1 | grep -v "punycode\|trace-deprecation\|bigint"
+echo "== agents e2e"
+./node_modules/.bin/tsx scripts/agents-e2e.ts 2>&1 | grep -v "punycode\|trace-deprecation\|bigint"
