@@ -10,6 +10,7 @@ import { usePrivate, type PublicLeft } from '@/lib/solana/PrivateContext';
 import { useSolanaWallet } from '@/lib/solana/WalletProvider';
 import { ix, usd, useSnapshot } from '@/lib/solana/useSolana';
 import { ActionStatus, statusFromError } from '@/components/solana/privacy';
+import { stepLabel } from '@/components/solana/ui';
 
 const SOL_FAUCET = 'https://faucet.solana.com';
 
@@ -179,9 +180,9 @@ function MintButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex h-11 max-w-[420px] items-center gap-1.5 truncate whitespace-nowrap rounded-full bg-[#254839] px-6 text-[14px] font-medium text-[#fdf8ed] hover:bg-[#1F3D31] disabled:opacity-45"
+      className="inline-flex h-11 w-[210px] items-center justify-center whitespace-nowrap rounded-full bg-[#254839] px-6 text-[14px] font-medium text-[#fdf8ed] hover:bg-[#1F3D31] disabled:opacity-45"
     >
-      {busy ? busyLabel ?? 'Minting...' : label}
+      {busy ? stepLabel(busyLabel) : label}
     </button>
   );
 }

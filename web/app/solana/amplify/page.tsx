@@ -11,7 +11,7 @@ import {
 } from '@/lib/solana/useSolana';
 import {
   AgentsCard, AmountBox, card, Hero, CreBadge, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
-  Stat, toDecimal,
+  Stat, stepLabel, toDecimal,
 } from '@/components/solana/ui';
 
 export default function SolanaAmplifyPage() {
@@ -179,7 +179,7 @@ export default function SolanaAmplifyPage() {
                   {!address
                     ? 'Connect Wallet'
                     : busy && status?.where === 'open'
-                      ? status.text
+                      ? stepLabel(status.text)
                       : !m
                         ? 'Loading markets...'
                         : !canLoop
@@ -240,7 +240,7 @@ export default function SolanaAmplifyPage() {
                   disabled={busy}
                   className={`mt-4 ${secondaryBtn}`}
                 >
-                  {busy && status?.where === 'close' ? status.text : 'Close, sell what repays, keep the rest'}
+                  {busy && status?.where === 'close' ? stepLabel(status.text) : 'Close, sell what repays, keep the rest'}
                 </button>
               </>
             )}

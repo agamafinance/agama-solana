@@ -217,3 +217,15 @@ export const toDecimal = (v: bigint, decimals: number) => {
   const f = s.slice(-decimals).replace(/0+$/, '');
   return f ? `${s.slice(0, -decimals)}.${f}` : s.slice(0, -decimals);
 };
+
+/// A busy button says what the user is waiting on in two words, whatever the
+/// progress line underneath says in full.
+export function stepLabel(text?: string): string {
+  const t = text ?? '';
+  if (/sign|unlock|signature/i.test(t)) return 'Sign in wallet...';
+  if (/approve/i.test(t)) return 'Approve in wallet...';
+  if (/sending|retrying/i.test(t)) return 'Sending...';
+  if (/confirm|waiting|landing|folding/i.test(t)) return 'Confirming...';
+  if (/build|proof|prepar/i.test(t)) return 'Preparing...';
+  return 'Working...';
+}
