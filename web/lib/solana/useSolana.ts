@@ -449,7 +449,7 @@ export function errorText(e: unknown): string {
   const anchor = [msg, ...logs].join('\n').match(/Error Message: ([^.\n]+)/);
   if (anchor) return anchor[1];
   if (/User rejected|rejected the request/i.test(msg)) return 'Cancelled in the wallet';
-  if (/insufficient (funds|lamports)|0x1\b/i.test(msg)) return 'Not enough SOL for the fee. Devnet SOL: faucet.solana.com';
+  if (/insufficient (funds|lamports)|no record of a prior credit|0x1\b/i.test(msg)) return 'This wallet has no SOL on devnet to pay fees. Get some at faucet.solana.com, then try again.';
   return msg.split('\n')[0].slice(0, 320);
 }
 

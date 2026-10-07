@@ -48,7 +48,7 @@ export default function SolanaPortfolioPage() {
         )}
       </Hero>
       <Panel>
-        <PrivacyBar />
+        <PrivacyBar sol={snap?.sol} />
         {error && snap && <p className="text-[12px] text-[#b4571f]">Showing data from {ago(snap.at)}: the RPC is not answering, retrying.</p>}
         {address && priv.unlocked && snap && (
           <div className={card} data-testid="balances">
@@ -123,7 +123,7 @@ export default function SolanaPortfolioPage() {
                   <p className="mt-3 text-[12px] text-fg-muted">
                     {x.lastAgentOp ? `Agents: ${AGENT_OPS[x.lastAgentOp]}, ${ago(x.lastAgentAt)}.` : 'Agents: no action yet, on target.'}
                   </p>
-                  <Link href={x.kind === 'earn' ? '/solana' : '/solana/amplify'} className="mt-3 inline-block text-[13px] text-fg underline">
+                  <Link href={`${x.kind === 'earn' ? '/solana' : '/solana/amplify'}?s=${x.stock.symbol}`} className="mt-3 inline-block text-[13px] text-fg underline">
                     Manage
                   </Link>
                 </div>

@@ -16,7 +16,7 @@ grows is your share count, not a stablecoin balance.
 |---|---|
 | Live app | https://app.agama.finance/solana (Solana devnet, Phantom) |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) on **devnet** |
-| Example transaction | [CRE price report from the Confidential Workflow, Data Streams priced, through the forwarder](https://explorer.solana.com/tx/2uzp2YfeoBrctTT8QLnJz96APhrqMQGraxK8baSnYDondFXhPRL5QxiCC6efFPBshFh4pzyYmUz6ZBkv85FZqnzG?cluster=devnet) |
+| Example transaction | [CRE price report, Data Streams priced, written by the CRE CLI simulator (TEE and DON simulated) through Chainlink's devnet mock forwarder](https://explorer.solana.com/tx/2uzp2YfeoBrctTT8QLnJz96APhrqMQGraxK8baSnYDondFXhPRL5QxiCC6efFPBshFh4pzyYmUz6ZBkv85FZqnzG?cluster=devnet) |
 | CRE evidence | [docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md): CLI output of both Confidential Workflows (TEE) |
 | Tracks | Solana: Best Use of Solana; Chainlink: Best workflow with CRE |
 
@@ -55,12 +55,12 @@ flowchart TB
         PROTO["Protocol PDA<br/>signs for the pool, the vault,<br/>every custody and mint"]
     end
 
-    subgraph price["THE PRICE LAYER"]
-        KEEPER["Keeper<br/>bounded pushes, 15% max per push"]
-        JUP["Live xStocks on Solana mainnet<br/>share price in NYSE session<br/>token price outside it"]
+    subgraph price["THE PRICE LAYER: CHAINLINK CRE"]
+        CRE["agama-prices, Confidential Workflow<br/>Data Streams read in a TEE<br/>checked against Jupiter + DEX by DON consensus"]
+        KEEPER["Keeper script<br/>fallback anyone can run"]
     end
 
-    AGENTS["Agents<br/>anyone can run them"]
+    AGENTS["Agents<br/>agama-agents CRE workflow (TEE signs)<br/>or anyone: permissionless"]
     LENDERS["USDC lenders"]
 
     USER --> app
@@ -71,7 +71,8 @@ flowchart TB
     POOL -->|"borrow USDC"| POS
     POS -->|"borrowed USDC"| VAULT
     AGENTS -->|"rebalance / compound / liquidate"| POS
-    JUP --> KEEPER -->|"price + session status"| MKT
+    CRE -->|"signed report via the forwarder"| MKT
+    KEEPER -.->|"bounded pushes"| MKT
     PROTO -.-> POOL
     PROTO -.-> VAULT
 
@@ -84,7 +85,7 @@ flowchart TB
     class USER,LENDERS actor
     class EARN,AMP product
     class POS,MKT,POOL,VAULT,PROTO core
-    class KEEPER,JUP oracle
+    class CRE,KEEPER oracle
     class AGENTS bot
 ```
 
@@ -339,10 +340,10 @@ and checked exactly.
   inside the 15 HTTP calls an execution allows, and the GLDY read across
   `mainnetRpcs`. The web app relays across the same three (`web/lib/solana/rpc.ts`),
   Solana's own first.
-- Pyth's public Hermes endpoint now answers 401 without an API key, so the
-  workflow reads Jupiter's price API, which returns both the token price and the
-  underlying share's price for every xStock. Orca's API answers 403 to the CRE
-  HTTP client, so GLDY is read from the whirlpool account itself.
+- Chainlink Data Streams lead the share prices; Jupiter's price API (token
+  price and the share's last print) and the deepest DEX pair are the
+  cross-check. Orca's API answers 403 to the CRE HTTP client, so GLDY is read
+  from the whirlpool account itself.
 
 ## CRE evidence
 
@@ -353,10 +354,10 @@ Terminal output of both workflows, with the devnet transactions they wrote:
 
 ```bash
 anchor build                      # or: cargo build-sbf --manifest-path programs/agama-solana/Cargo.toml
-./scripts/fetch-fixtures.sh && cargo test  # 14 LiteSVM flows, incl. CRE through Chainlink's forwarder
+./scripts/fetch-fixtures.sh && cargo test  # 16 LiteSVM flows, incl. CRE through Chainlink's forwarder
 ./scripts/check.sh                # everything CI runs, before pushing
 pnpm install
-pnpm setup                        # initialize, 4 markets, first prices, seed the pool (idempotent)
+pnpm setup                        # initialize, 10 markets, first prices, seed the pool (idempotent)
 pnpm e2e                          # 9 real transactions on devnet from a fresh wallet
 pnpm e2e:local                    # throwaway validator: setup, the e2e, the agents through
                                   # the real keeper with prices moved on purpose (17 checks),

@@ -81,7 +81,7 @@ export const ata = (owner: PublicKey, mint: PublicKey) =>
 /// What an agent last did to a position, as the program records it.
 export const AGENT_OPS: Record<number, string> = {
   1: 'borrowed more into the vault',
-  2: 'repaid from the yield',
+  2: 'repaid from the vault, no stock sold',
   3: 'bought more stock with the yield',
   4: 'repaid from the yield before any stock was sold',
   5: 'liquidated part of the position',

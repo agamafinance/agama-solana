@@ -15,7 +15,7 @@ const amountText = (l: PublicLeft) => {
 
 /// The privacy line at the top of every page: holdings are private, the keys
 /// are unlocked for this session or not, and what the signature means.
-export function PrivacyBar() {
+export function PrivacyBar({ sol }: { sol?: number } = {}) {
   const { address } = useSolanaWallet();
   const { unlocked, unlocking, unlock, lock, balances, busy, shield, balancesError, balancesAt } = usePrivate();
   const [err, setErr] = useState('');
@@ -24,6 +24,19 @@ export function PrivacyBar() {
   const publicLeft: PublicLeft[] = (balances ?? []).filter((b) => b.public > 0n).map((b) => ({ mint: b.token.mint, amount: b.public }));
   const stale = balancesAt ? Math.floor((Date.now() - balancesAt) / 1000) : 0;
   return (
+    <>
+    {sol === 0 && (
+      <div className="rounded-2xl border border-[#c98a2b]/40 bg-[#c98a2b]/10 px-4 py-3 text-[13px] text-fg" data-testid="devnet-notice">
+        Agama runs on <b>Solana devnet</b> and this wallet has no devnet SOL for fees. In Phantom: Settings, Developer
+        Settings, Testnet Mode on, then Solana Devnet. Get devnet SOL at{' '}
+        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer" className="underline">faucet.solana.com</a>{' '}
+        for{' '}
+        <button onClick={() => navigator.clipboard?.writeText(address.toBase58())} className="underline" title="Copy your address">
+          {address.toBase58().slice(0, 4)}...{address.toBase58().slice(-4)} (copy)
+        </button>
+        , then open the Faucet tab.
+      </div>
+    )}
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl bg-[#254839]/[0.05] px-4 py-3 text-[12px] text-fg-muted" data-testid="privacy-bar">
       <span className="inline-flex items-center gap-1.5 rounded-full bg-[#254839] px-2.5 py-1 font-medium text-[#fdf8ed]">
         Private by default
@@ -67,6 +80,7 @@ export function PrivacyBar() {
       {balancesError && <span className="text-[#b4571f]">Balances from {stale} s ago: the RPC is not answering, retrying.</span>}
       {(err || msg) && <span>{err || msg}</span>}
     </div>
+    </>
   );
 }
 

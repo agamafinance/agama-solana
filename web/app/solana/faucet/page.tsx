@@ -68,7 +68,7 @@ export default function SolanaFaucetPage() {
         </p>
       </Hero>
       <Panel>
-        <PrivacyBar />
+        <PrivacyBar sol={snap?.sol} />
         <div className={`${card} max-w-[640px]`}>
           <table className="w-full text-[14px]">
             <thead>

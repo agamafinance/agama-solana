@@ -19,6 +19,18 @@ export default function SolanaAmplifyPage() {
   const { snap, error, refresh } = useSnapshot(address);
   const priv = usePrivate();
   const [sel, setSel] = useState(3);
+  // Open on the stock asked for (?s=NVDA, from Portfolio), else on the first
+  // market this wallet already has a position in.
+  const [opened, setOpened] = useState(false);
+  useEffect(() => {
+    if (opened || !snap) return;
+    const want = new URLSearchParams(window.location.search).get('s');
+    const byParam = want ? snap.markets.findIndex((mk) => mk.stock.symbol === want) : -1;
+    const held = snap.amplify.findIndex((x) => !!x);
+    if (byParam >= 0) setSel(byParam);
+    else if (held >= 0) setSel(held);
+    setOpened(true);
+  }, [snap, opened]);
   const m = snap?.markets[sel];
   const position = snap?.amplify[sel];
   const p = snap?.protocol;
@@ -97,7 +109,7 @@ export default function SolanaAmplifyPage() {
       </Hero>
 
       <Panel>
-        <PrivacyBar />
+        <PrivacyBar sol={snap?.sol} />
         {error && !snap && <p className="text-[13px] text-[#b4571f]">{error}</p>}
         {error && snap && (
           <p className="text-[12px] text-[#b4571f]">Showing data from {ago(snap.at)}: the RPC is not answering, retrying.</p>

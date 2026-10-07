@@ -242,6 +242,7 @@ function errorOf(e: unknown): string {
   const text = [msg, any?.transactionMessage ?? '', ...logs].join('\n');
   const anchor = text.match(/Error Message: ([^.\n]+)/);
   if (anchor) return anchor[1];
+  if (/insufficient (funds|lamports)|no record of a prior credit|0x1\b/i.test(text)) return 'This wallet has no SOL on devnet to pay fees. Get some at faucet.solana.com, then try again.';
   const log = logs.find((l) => /Error|failed|insufficient/i.test(l) && !/consumed/.test(l));
   if (log) return log.replace(/^Program log: /, '').slice(0, 200);
   const tm = any?.transactionMessage?.split('\n').find((l) => l.trim().length > 0);

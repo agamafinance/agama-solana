@@ -8,12 +8,16 @@ Neither credential ever reaches a DON node. Everything public (reading the
 chain and public prices with median or identical consensus, signing the
 report, writing to Solana) goes through the DONs via `usingTheDons()`.
 
-They run through the CRE CLI (`cre workflow simulate --broadcast`), with real
-HTTP fetches, consensus, report signing and Solana writes. Reproduce:
+They run through the CRE CLI simulator (`cre workflow simulate --broadcast`):
+the TEE and the DON are simulated (the CLI says so below), the HTTP fetches,
+the report and the Solana writes are real. The reports reach the program
+through Chainlink's devnet mock forwarder; the production config points at the
+Keystone Forwarder. The CLI prints log times in local time (UTC+8) with a Z
+suffix: 15:47:54 in the logs is 07:47:54 UTC, the transaction's block time. Reproduce:
 `./cre/run-devnet.sh agama-prices`, `./cre/run-devnet.sh agama-agents`
 (devnet), `./cre/simulate-local.sh` (local validator, includes an agent action).
 
-## 1. agama-prices on Solana devnet (7 Oct 2026, 15:47 UTC)
+## 1. agama-prices on Solana devnet (7 Oct 2026, 07:47 UTC)
 
 Data Streams (overnight session for the shares, XAU/USDT x USDT/USD for gold)
 read in the enclave, checked against the xStock tokens and the Orca pool agreed

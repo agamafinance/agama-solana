@@ -129,11 +129,12 @@ export function CreBadge({ cre }: { cre: { simulation: boolean; reports: number;
         Priced by Chainlink CRE
       </span>
       <span>
-        Every minute the DON reads each share from Chainlink Data Streams, checks it against the xStock token on Jupiter and the deepest DEX pair, and GLDY
-        off Orca&apos;s pool against Data Streams gold, skips a market whose sources disagree, and writes a signed report. A second workflow runs
-        the agents. Last price applied {ageText}
+        A Confidential Workflow reads each share from Chainlink Data Streams inside a TEE (the API secret never leaves it), the DON checks it
+        against the xStock token on Jupiter and the deepest DEX pair, and GLDY off Orca&apos;s pool against Data Streams gold, skips a market
+        whose sources disagree and writes a signed report: three markets a minute, each repriced every 4 minutes. A second workflow runs the
+        agents. Last price applied {ageText}
         {cre.simulation
-          ? ", through the CRE simulator and Chainlink's devnet mock forwarder (no DON signatures yet)."
+          ? ", through the CRE CLI simulator (TEE and DON simulated) and Chainlink's devnet mock forwarder."
           : ', through the Keystone Forwarder.'}
       </span>
     </div>

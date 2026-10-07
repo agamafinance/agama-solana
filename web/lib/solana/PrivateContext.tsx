@@ -132,6 +132,17 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
     }
   }, [provider]);
 
+  /// Unlock with a word of explanation first: the wallet is about to show a
+  /// raw signing request, and the status line should say what it is for.
+  const unlockWith = useCallback(
+    (progress?: (text: string) => void) => {
+      if (!keysRef.current)
+        progress?.('Sign once in the wallet to unlock your private balances: it lets this app read them, never spend them.');
+      return unlock();
+    },
+    [unlock],
+  );
+
   const lock = useCallback(() => {
     keysRef.current = undefined;
     setKeys(undefined);
@@ -181,12 +192,12 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
     (items, progress) =>
       withLock(async () => {
         try {
-          return await shieldNow(await unlock(), items, progress);
+          return await shieldNow(await unlockWith(progress), items, progress);
         } finally {
           refresh();
         }
       }),
-    [withLock, shieldNow, unlock, refresh],
+    [withLock, shieldNow, unlockWith, refresh],
   );
 
   const act = useCallback<Ctx['act']>(
@@ -210,7 +221,7 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
             fromPrivate = spend!.amount > pub ? spend!.amount - pub : 0n;
             if (fromPrivate > 0n) {
               if (!k) {
-                k = await unlock();
+                k = await unlockWith(progress);
                 before = await c.readBalances(connection, address, k);
               }
               const b = bal(spend!.mint);
@@ -231,7 +242,7 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
             }
           }
           if (returns?.length && !k) {
-            k = await unlock();
+            k = await unlockWith(progress);
             before = await c.readBalances(connection, address, k);
           }
           const unshieldTxs = steps.length ? await countTxs(address, steps) : 0;
@@ -278,7 +289,7 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
           refresh();
         }
       }),
-    [withLock, need, unlock, shieldNow, refresh],
+    [withLock, need, unlockWith, shieldNow, refresh],
   );
 
   const mintPrivately = useCallback<Ctx['mintPrivately']>(
@@ -286,7 +297,7 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
       withLock(async () => {
         const { address, provider } = need();
         try {
-          const k = await unlock();
+          const k = await unlockWith(progress);
           const c = await lib();
           progress?.('Building the proofs...');
           // Built before the mint lands: minting only touches the public side,
@@ -305,7 +316,7 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
           refresh();
         }
       }),
-    [withLock, need, unlock, refresh],
+    [withLock, need, unlockWith, refresh],
   );
 
   return (
