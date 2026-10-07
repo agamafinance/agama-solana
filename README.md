@@ -14,6 +14,7 @@ grows is your share count, not a stablecoin balance.
 
 | | |
 |---|---|
+| Demo video | https://youtu.be/M5GXPA1J31w (2:22) |
 | Live app | https://app.agama.finance/solana (Solana devnet, Phantom) |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) on **devnet** |
 | Example transaction | [CRE price report, Data Streams priced, written by the CRE CLI simulator (TEE and DON simulated) through Chainlink's devnet mock forwarder](https://explorer.solana.com/tx/2uzp2YfeoBrctTT8QLnJz96APhrqMQGraxK8baSnYDondFXhPRL5QxiCC6efFPBshFh4pzyYmUz6ZBkv85FZqnzG?cluster=devnet) |
