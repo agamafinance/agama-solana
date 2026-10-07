@@ -11,7 +11,7 @@ import {
 } from '@/lib/solana/useSolana';
 import {
   AgentsCard, AmountBox, card, Hero, CreBadge, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
-  Stat, stepLabel, toDecimal,
+  Stat, Step, toDecimal,
 } from '@/components/solana/ui';
 
 export default function SolanaEarnPage() {
@@ -199,7 +199,7 @@ export default function SolanaEarnPage() {
               {!address
                 ? 'Connect Wallet'
                 : busy && status?.where === 'deposit'
-                  ? stepLabel(status.text)
+                  ? <Step text={status.text} />
                   : !m
                     ? 'Loading markets...'
                     : !enough
@@ -249,7 +249,7 @@ export default function SolanaEarnPage() {
                 </dl>
                 {sliderMoved && (
                   <button onClick={moveSlider} disabled={busy} className={`mt-4 ${secondaryBtn}`}>
-                    {busy && status?.where === 'slider' ? stepLabel(status.text) : `Move the target to ${pct(ltv)}`}
+                    {busy && status?.where === 'slider' ? <Step text={status.text} /> : `Move the target to ${pct(ltv)}`}
                   </button>
                 )}
                 {!busy && status?.where === 'slider' && <ActionStatus status={status} />}
@@ -269,7 +269,7 @@ export default function SolanaEarnPage() {
                   close, one for the shield. The amounts are visible as they leave the protocol.
                 </p>
                 <button onClick={close} disabled={busy} className={`mt-4 ${secondaryBtn}`}>
-                  {busy && status?.where === 'close' ? stepLabel(status.text) : 'Close, get the stock back'}
+                  {busy && status?.where === 'close' ? <Step text={status.text} /> : 'Close, get the stock back'}
                 </button>
               </>
             )}

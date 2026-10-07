@@ -1,5 +1,7 @@
 'use client';
 
+import { Loader2 } from 'lucide-react';
+
 import { ReactNode } from 'react';
 
 import { TokenIcon } from '@/components/icons/TokenIcon';
@@ -218,14 +220,20 @@ export const toDecimal = (v: bigint, decimals: number) => {
   return f ? `${s.slice(0, -decimals)}.${f}` : s.slice(0, -decimals);
 };
 
-/// A busy button says what the user is waiting on in two words, whatever the
-/// progress line underneath says in full.
+/// A busy button says what the user is waiting on in one word, with a
+/// spinner, whatever the progress line underneath says in full.
 export function stepLabel(text?: string): string {
   const t = text ?? '';
-  if (/sign|unlock|signature/i.test(t)) return 'Sign in wallet...';
-  if (/approve/i.test(t)) return 'Approve in wallet...';
-  if (/sending|retrying/i.test(t)) return 'Sending...';
-  if (/confirm|waiting|landing|folding/i.test(t)) return 'Confirming...';
-  if (/build|proof|prepar/i.test(t)) return 'Preparing...';
-  return 'Working...';
+  if (/sign|unlock|signature|approve/i.test(t)) return 'Sign in';
+  if (/build|proof|prepar/i.test(t)) return 'Preparing';
+  return 'Sending';
+}
+
+export function Step({ text }: { text?: string }) {
+  return (
+    <span className="inline-flex items-center justify-center gap-2">
+      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+      {stepLabel(text)}
+    </span>
+  );
 }
