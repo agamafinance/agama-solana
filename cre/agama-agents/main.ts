@@ -22,19 +22,19 @@
 // lookup tables yet (~265 bytes left before accounts). The instructions are
 // permissionless: the workflow is one of the signers anyone could be.
 //
-// The agent key is a CRE secret, so under a DON every node operator can read
-// it. It only pays fees and signs permissionless calls; production would run
-// the signing step as a Confidential Workflow (handlerInTee).
+// The agent key is a CRE secret read inside the enclave only: node operators
+// never see it. It pays fees and signs permissionless calls.
 import {
 	ConsensusAggregationByFields,
 	consensusIdenticalAggregation,
 	CronCapability,
-	handler,
+	handlerInTee,
 	HTTPClient,
 	type HTTPSendRequester,
 	median,
 	Runner,
 	type Runtime,
+	type TeeRuntime,
 } from '@chainlink/cre-sdk'
 import { Keypair, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js'
 import { z } from 'zod'
@@ -278,7 +278,11 @@ const send = (req: HTTPSendRequester, config: Config, txs: string[]): Sent => {
 	return out
 }
 
-const onCron = (runtime: Runtime<Config>) => {
+// The handler runs in a TEE (AWS Nitro): the agent key is read and used there
+// only. Reading the chain, agreeing on the plan and sending go through the
+// DONs (usingTheDons).
+const onCron = (tee: TeeRuntime<Config>) => {
+	const runtime: Runtime<Config> = tee.usingTheDons()
 	const config = runtime.config
 	const nowS = Math.floor(runtime.now().getTime() / 1000)
 	const http = new HTTPClient()
@@ -289,8 +293,9 @@ const onCron = (runtime: Runtime<Config>) => {
 		return { sent: 0, landed: 0, refused: 0 }
 	}
 
-	// Step 2, DON mode: sign deterministically, so every node holds the same bytes.
-	const signer = Keypair.fromSecretKey(b58decode(runtime.getSecret({ id: 'AGENT_KEY' }).result().value))
+	// Step 2, in the enclave: sign the agreed plan. The key never reaches a DON
+	// node; Ed25519 is deterministic, so the bytes are the plan's and nothing else.
+	const signer = Keypair.fromSecretKey(b58decode(tee.getSecret({ id: 'AGENT_KEY' }).result().value))
 	const a = accounts(config)
 	const byMarket = new Map(a.markets.map((m) => [m.market.toBase58(), m]))
 	const txs = agreed.actions.map((act) => {
@@ -329,7 +334,9 @@ const onCron = (runtime: Runtime<Config>) => {
 	return sent
 }
 
-const initWorkflow = (config: Config) => [handler(new CronCapability().trigger({ schedule: config.schedule }), onCron)]
+const initWorkflow = (config: Config) => [
+	handlerInTee(new CronCapability().trigger({ schedule: config.schedule }), onCron, [{ tee: 'nitro', regions: ['us-west-2'] }]),
+]
 
 export async function main() {
 	const runner = await Runner.newRunner<Config>({ configSchema })

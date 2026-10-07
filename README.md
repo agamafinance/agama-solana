@@ -16,8 +16,8 @@ grows is your share count, not a stablecoin balance.
 |---|---|
 | Live app | https://app.agama.finance/solana (Solana devnet, Phantom) |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) on **devnet** |
-| Example transaction | [CRE price report, Data Streams priced, through the forwarder](https://explorer.solana.com/tx/3w4s2gVSGdzQZzrD251yZHuPckXpkQeLzJioMpvNs2ZM3gS9a9viE18vYrdNiQvE4p23tqcqTUwgZnrNVcZ7rJyq?cluster=devnet) |
-| CRE evidence | [docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md): CLI output of both workflows |
+| Example transaction | [CRE price report from the Confidential Workflow, Data Streams priced, through the forwarder](https://explorer.solana.com/tx/2uzp2YfeoBrctTT8QLnJz96APhrqMQGraxK8baSnYDondFXhPRL5QxiCC6efFPBshFh4pzyYmUz6ZBkv85FZqnzG?cluster=devnet) |
+| CRE evidence | [docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md): CLI output of both Confidential Workflows (TEE) |
 | Tracks | Solana: Best Use of Solana; Chainlink: Best workflow with CRE |
 
 **Try it without help.** Open the app with Phantom set to devnet (a little
@@ -131,14 +131,27 @@ Two Chainlink Runtime Environment workflows run the protocol. `agama-prices`
 prices the markets; `agama-agents` runs the agents. The keeper script stays
 only as a fallback anyone can run.
 
+**Both are Confidential Workflows.** Each handler runs in a TEE
+(`handlerInTee`, AWS Nitro) and holds the one credential that must not leak:
+the Chainlink Data Streams API key and secret for `agama-prices` (a
+proprietary data credential: the HMAC signature is computed in the enclave),
+the agent's signing key for `agama-agents`. Only decoded prices and signed
+transactions leave the enclave. Everything that should be public and agreed
+goes through the DONs with `usingTheDons()`: reading the chain and the public
+price sources (median or identical consensus), signing the report, writing to
+Solana. So no node operator ever holds either secret, and no single enclave
+decides alone: its Data Streams price must agree with what the DON read.
+
 ### agama-prices
 
 ```
 cron, every minute (one group of three markets per run, in turn)
-  each DON node, over HTTP:
+  in the TEE (handlerInTee, AWS Nitro), with the API secret:
     Chainlink Data      the 9 shares' regular, extended and overnight streams
-      Streams           (RWA Advanced v11), one signed bulk request; the
-                        marketStatus field picks the live session
+      Streams           (RWA Advanced v11), one HMAC-signed bulk request; the
+                        marketStatus field picks the live session; XAU/USDT x
+                        USDT/USD for gold
+  each DON node, over HTTP (usingTheDons):
     Jupiter price API   the 9 xStocks: the token's own price and the share's
     DexScreener         the deepest USDC pair of each xStock: a second,
                         independent token price (Raydium, Meteora...)
@@ -164,8 +177,8 @@ cron, every minute (one group of three markets per run, in turn)
   and the DEX pair) agrees within 3%. Regular hours get the session terms, the
   extended sessions the off-hours ones. Weekends, when the streams are closed,
   fall back to the token. Testnet credentials from Chainlink live in
-  `.keys/datastreams.env` and reach the workflow as CRE secrets; under a DON
-  they belong in the Vault DON. `scripts/datastreams-check.ts` fetches and
+  `.keys/datastreams.env` and reach the enclave as CRE secrets; deployed, they
+  sit in the Vault DON and are released to the TEE only. `scripts/datastreams-check.ts` fetches and
   decodes the 27 reports on its own.
 - **Next: verify the reports on chain.** The program could take the signed
   report and CPI Chainlink's Data Streams Verifier on Solana, so the price is

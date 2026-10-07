@@ -81,7 +81,7 @@ local-settings:
     config-path: "./config.local.json"
     secrets-path: "../secrets.yaml"
 YAML
-cre workflow simulate agama-agents --target local-settings --broadcast --non-interactive --trigger-index 0 2>&1 | grep -E "USER LOG|✗" || true
+cre workflow simulate agama-agents --target local-settings --broadcast --non-interactive --trigger-index 0 2>&1 | grep -E "USER LOG|✗|AWS Nitro" || true
 mv agama-agents/workflow.yaml.bak agama-agents/workflow.yaml; rm -f agama-agents/config.local.json
 cd "$ROOT"
 ./node_modules/.bin/tsx scripts/agents-cre-check.ts verify "$ROOT/.keys/cre-agent.json" 2>&1 | grep -v "punycode\|trace-deprecation\|bigint"

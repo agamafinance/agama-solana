@@ -3,7 +3,9 @@
 // Every minute, each node of the DON reads the same public sources:
 //   - Chainlink Data Streams (RWA Advanced v11): each share's regular,
 //     extended and overnight stream; marketStatus picks the live one. The
-//     primary price whenever a session is live
+//     primary price whenever a session is live. Read inside a TEE (this is a
+//     Confidential Workflow): the Data Streams API key and secret, a
+//     proprietary data credential, never reach a DON node
 //   - Jupiter's price API for the xStocks on Solana mainnet: the token's own
 //     24/7 price and the underlying share's last price
 //   - DexScreener, the deepest USDC pair of each xStock (Raydium, Meteora...):
@@ -22,13 +24,14 @@ import {
 	ConsensusAggregationByFields,
 	CronCapability,
 	getNetwork,
-	handler,
+	handlerInTee,
 	HTTPClient,
 	type HTTPSendRequester,
 	median,
 	Runner,
 	type Runtime,
 	type SolanaAccountMeta,
+	type TeeRuntime,
 	SolanaClient,
 	SolanaTxStatus,
 	solanaAccountMeta,
@@ -180,15 +183,16 @@ function decodeReport(hex: string): { mid: number; status: number; at: number } 
 }
 
 /** One signed bulk request to the Data Streams API (HMAC-SHA256 over method,
- *  path, body hash, key and time). Raw reports by feed ID; empty on any error
- *  (a feed the credentials do not cover makes the whole request 401). */
-const dsBulk = (req: HTTPSendRequester, config: Config, ds: DsCreds, ids: string[]): Map<string, string> => {
+ *  path, body hash, key and time), made from inside the enclave: the key and
+ *  secret never leave it. Raw reports by feed ID; empty on any error (a feed
+ *  the credentials do not cover makes the whole request 401). */
+const dsBulk = (runtime: TeeRuntime<Config>, ds: DsCreds, ids: string[]): Map<string, string> => {
 	const path = `/api/v1/reports/bulk?feedIDs=${ids.join(',')}&timestamp=${Math.floor(ds.nowMs / 1000) - 2}`
 	const toSign = `GET ${path} ${bytesToHex(sha256(new Uint8Array()))} ${ds.key} ${ds.nowMs}`
 	const signature = bytesToHex(hmac(sha256, enc(ds.secret), enc(toSign)))
-	const resp = req
-		.sendRequest({
-			url: config.dataStreamsUrl + path,
+	const resp = new HTTPClient()
+		.sendRequest(runtime, {
+			url: runtime.config.dataStreamsUrl + path,
 			method: 'GET' as const,
 			headers: { Authorization: ds.key, 'X-Authorization-Timestamp': String(ds.nowMs), 'X-Authorization-Signature-SHA256': signature },
 		})
@@ -199,28 +203,22 @@ const dsBulk = (req: HTTPSendRequester, config: Config, ds: DsCreds, ids: string
 	return out
 }
 
-const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observation => {
+/** Chainlink Data Streams, read inside the TEE: the live session's price for
+ *  every share (regular, extended or overnight stream, as marketStatus says)
+ *  and XAU/USD for gold. Only the decoded prices leave the enclave. */
+const streamsInTee = (runtime: TeeRuntime<Config>): Observation => {
+	const config = runtime.config
 	const out: Observation = {}
-	const xs = config.markets.filter((m) => m.kind === 'xstock')
-	const golds = config.markets.filter((m) => m.kind === 'gold')
-	for (const m of config.markets) {
-		out[`${m.symbol}_a`] = 0
-		out[`${m.symbol}_b`] = 0
-		out[`${m.symbol}_t`] = 0
-		out[`${m.symbol}_d`] = 0
-		out[`${m.symbol}_g`] = 0 // gold spot publish time
-		out[`${m.symbol}_s`] = 0 // Data Streams mid for the session that is live
-		out[`${m.symbol}_ss`] = 0 // its market status (2 regular, 1 pre, 3 post, 4 overnight)
-		out[`${m.symbol}_st`] = 0 // its observation time
+	const ds: DsCreds = {
+		key: runtime.getSecret({ id: 'DATASTREAMS_API_KEY' }).result().value,
+		secret: runtime.getSecret({ id: 'DATASTREAMS_API_SECRET' }).result().value,
+		nowMs: runtime.now().getTime(),
 	}
-	// Chainlink Data Streams first: every share's regular, extended and
-	// overnight stream in one signed request (HMAC-SHA256 over method, path,
-	// body hash, key and time, as the API wants).
 	const streamed = config.markets.flatMap((m) => (m.kind === 'xstock' && m.streams ? [m] : []))
-	if (streamed.length && ds.key) {
+	if (streamed.length) {
 		try {
 			const ids = streamed.flatMap((m) => [m.streams!.regular, m.streams!.extended, m.streams!.overnight])
-			const raw = dsBulk(req, config, ds, ids)
+			const raw = dsBulk(runtime, ds, ids)
 			const byId = new Map([...raw].map(([k, v]) => [k, decodeReport(v)]))
 			for (const m of streamed) {
 				const reg = byId.get(m.streams!.regular.toLowerCase())
@@ -235,6 +233,39 @@ const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observati
 				}
 			}
 		} catch {}
+	}
+	const goldStreamed = config.markets.flatMap((m) => (m.kind === 'gold' && m.streams ? [m] : []))
+	if (goldStreamed.length) {
+		try {
+			const raw = dsBulk(runtime, ds, goldStreamed.flatMap((m) => [m.streams!.xau, m.streams!.usdt]))
+			for (const m of goldStreamed) {
+				const xau = raw.get(m.streams!.xau.toLowerCase())
+				const usdt = raw.get(m.streams!.usdt.toLowerCase())
+				if (!xau || !usdt) continue
+				const x = decodeReport(xau)
+				const u = decodeReport(usdt)
+				if (x.mid > 0 && u.mid > 0) {
+					out[`${m.symbol}_s`] = x.mid * u.mid
+					out[`${m.symbol}_st`] = Math.min(x.at, u.at)
+				}
+			}
+		} catch {}
+	}
+	for (const m of config.markets) out[`${m.symbol}_s_ok`] = (out[`${m.symbol}_s`] ?? 0) > 0 ? 1 : 0
+	return out
+}
+
+/** The public sources, read by every DON node and agreed field by field. */
+const observe = (req: HTTPSendRequester, config: Config): Observation => {
+	const out: Observation = {}
+	const xs = config.markets.filter((m) => m.kind === 'xstock')
+	const golds = config.markets.filter((m) => m.kind === 'gold')
+	for (const m of config.markets) {
+		out[`${m.symbol}_a`] = 0
+		out[`${m.symbol}_b`] = 0
+		out[`${m.symbol}_t`] = 0
+		out[`${m.symbol}_d`] = 0
+		out[`${m.symbol}_g`] = 0 // gold spot publish time
 	}
 	// Each source on its own: one failing must not take the others down.
 	if (xs.length) {
@@ -268,23 +299,6 @@ const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observati
 			}
 		} catch {}
 	}
-	const goldStreamed = config.markets.flatMap((m) => (m.kind === 'gold' && m.streams ? [m] : []))
-	if (goldStreamed.length && ds.key) {
-		try {
-			const raw = dsBulk(req, config, ds, goldStreamed.flatMap((m) => [m.streams!.xau, m.streams!.usdt]))
-			for (const m of goldStreamed) {
-				const xau = raw.get(m.streams!.xau.toLowerCase())
-				const usdt = raw.get(m.streams!.usdt.toLowerCase())
-				if (!xau || !usdt) continue
-				const x = decodeReport(xau)
-				const u = decodeReport(usdt)
-				if (x.mid > 0 && u.mid > 0) {
-					out[`${m.symbol}_s`] = x.mid * u.mid
-					out[`${m.symbol}_st`] = Math.min(x.at, u.at)
-				}
-			}
-		} catch {}
-	}
 	if (golds.length) {
 		let spot = 0
 		let spotTime = 0
@@ -311,7 +325,7 @@ const observe = (req: HTTPSendRequester, config: Config, ds: DsCreds): Observati
 			} catch {}
 		}
 	}
-	for (const m of config.markets) for (const k of ['a', 'b', 'd', 's']) out[`${m.symbol}_${k}_ok`] = out[`${m.symbol}_${k}`] > 0 ? 1 : 0
+	for (const m of config.markets) for (const k of ['a', 'b', 'd']) out[`${m.symbol}_${k}_ok`] = out[`${m.symbol}_${k}`] > 0 ? 1 : 0
 	return out
 }
 
@@ -395,24 +409,26 @@ const symbolBytes = (s: string) => {
 	return b
 }
 
-const onCron = (runtime: Runtime<Config>) => {
+// The handler runs in a TEE (AWS Nitro). Data Streams is read there with the
+// API credentials; the public sources, the consensus, the report signing and
+// the Solana write go through the DONs (usingTheDons).
+const onCron = (tee: TeeRuntime<Config>) => {
+	const runtime: Runtime<Config> = tee.usingTheDons()
 	const config = runtime.config
 	const sol = config.solana
 	const now = runtime.now()
 
 	const fields = Object.fromEntries(
 		config.markets.flatMap((m) =>
-			['a', 'b', 't', 'd', 'g', 's', 'ss', 'st', 'a_ok', 'b_ok', 'd_ok', 's_ok'].map((k) => [`${m.symbol}_${k}`, median<number>]),
+			['a', 'b', 't', 'd', 'g', 'a_ok', 'b_ok', 'd_ok'].map((k) => [`${m.symbol}_${k}`, median<number>]),
 		),
 	)
 	let obs: Observation
 	try {
 		const agg = ConsensusAggregationByFields<Observation>(fields as any)
-		// Secrets are read in DON mode and handed to the node-mode fetch.
-		const key = runtime.getSecret({ id: 'DATASTREAMS_API_KEY' }).result().value
-		const secret = runtime.getSecret({ id: 'DATASTREAMS_API_SECRET' }).result().value
 		const call = new HTTPClient().sendRequest(runtime, observe, agg)
-		obs = call(config, { key, secret, nowMs: now.getTime() }).result()
+		// Public sources agreed by the DON, Data Streams from the enclave.
+		obs = { ...call(config).result(), ...streamsInTee(tee) }
 	} catch (e: any) {
 		runtime.log(`observe failed: ${e?.message} ${String(e?.stack ?? '').slice(0, 600)}`)
 		throw e
@@ -473,7 +489,9 @@ const onCron = (runtime: Runtime<Config>) => {
 	return { markets: decided.length, reports: sigs }
 }
 
-const initWorkflow = (config: Config) => [handler(new CronCapability().trigger({ schedule: config.schedule }), onCron)]
+const initWorkflow = (config: Config) => [
+	handlerInTee(new CronCapability().trigger({ schedule: config.schedule }), onCron, [{ tee: 'nitro', regions: ['us-west-2'] }]),
+]
 
 export async function main() {
 	const runner = await Runner.newRunner<Config>({ configSchema })
