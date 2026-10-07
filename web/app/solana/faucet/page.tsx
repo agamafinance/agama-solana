@@ -35,12 +35,18 @@ export default function SolanaFaucetPage() {
     if (!address || !provider) return setStatus({ text: 'Connect a wallet first.' });
     setStatus({ text: 'Building the transactions...' });
     try {
+      // Only what is missing: a wallet that already holds a full claim of a
+      // token is not minted it again, so a second click completes the set.
+      const tokens = [{ mint: usdcMint, amount: FAUCET_USDC }, ...STOCKS.map((s) => ({ mint: s.stockMint, amount: FAUCET_STOCK }))];
       const all = await ix.faucet(address);
+      const has = (mint: typeof usdcMint) => (priv.unlocked ? priv.privateOf(mint) + priv.publicOf(mint) : 0n);
+      const want = tokens.map((t, i) => ({ ...t, ix: all[i] })).filter((t) => has(t.mint) < t.amount);
+      if (!want.length) return setStatus({ text: 'Done. You already hold every test token: head to Earn.' });
       const ixGroups: typeof all[] = [];
-      for (let i = 0; i < all.length; i += 4) ixGroups.push(all.slice(i, i + 4));
-      const minted = [{ mint: usdcMint, amount: FAUCET_USDC }, ...STOCKS.map((s) => ({ mint: s.stockMint, amount: FAUCET_STOCK }))];
+      for (let i = 0; i < want.length; i += 4) ixGroups.push(want.slice(i, i + 4).map((t) => t.ix));
+      const minted = want.map(({ mint, amount }) => ({ mint, amount }));
       const sigs = await priv.mintPrivately({ ixGroups, minted, progress: (text) => setStatus({ text }) });
-      setStatus({ text: `Done. 10,000 USDC and 10 of each stock are in your private balance.`, sig: sigs[sigs.length - 1] });
+      setStatus({ text: want.length === tokens.length ? 'Done. 10,000 USDC and 10 of each stock are in your private balance.' : `Done. The ${want.length} missing tokens are in your private balance.`, sig: sigs[sigs.length - 1] });
     } catch (e) {
       setStatus(statusFromError(e));
     } finally {
