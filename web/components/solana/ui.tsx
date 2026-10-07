@@ -130,7 +130,7 @@ export function CreBadge({ cre }: { cre: { simulation: boolean; reports: number;
       </span>
       <span>
         Every minute the DON reads each share from Chainlink Data Streams, checks it against the xStock token on Jupiter and the deepest DEX pair, and GLDY
-        off Orca&apos;s pool, skips a market whose sources disagree, and writes a signed report. A second workflow runs
+        off Orca&apos;s pool against Data Streams gold, skips a market whose sources disagree, and writes a signed report. A second workflow runs
         the agents. Last price applied {ageText}
         {cre.simulation
           ? ", through the CRE simulator and Chainlink's devnet mock forwarder (no DON signatures yet)."

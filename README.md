@@ -10,8 +10,31 @@ against it, puts the USDC to work in the Agama private credit vault, and
 permissionless agents turn the yield back into **more of the stock**. What
 grows is your share count, not a stablecoin balance.
 
-This is the same product as [Agama on X Layer](https://github.com/agamafinance/agama-xlayer),
-rewritten from Solidity into one Anchor program.
+## TOKEN2049 Origins Hackathon
+
+| | |
+|---|---|
+| Live app | https://app.agama.finance/solana (Solana devnet, Phantom) |
+| Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) on **devnet** |
+| Example transaction | [CRE price report, Data Streams priced, through the forwarder](https://explorer.solana.com/tx/3w4s2gVSGdzQZzrD251yZHuPckXpkQeLzJioMpvNs2ZM3gS9a9viE18vYrdNiQvE4p23tqcqTUwgZnrNVcZ7rJyq?cluster=devnet) |
+| CRE evidence | [docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md): CLI output of both workflows |
+| Tracks | Solana: Best Use of Solana; Chainlink: Best workflow with CRE |
+
+**Try it without help.** Open the app with Phantom set to devnet (a little
+devnet SOL from faucet.solana.com pays the fees), hit **Faucet** (USDC, the nine
+stocks and GLDY land straight into your private balance), then **Earn**: pick a
+stock, an amount and a level, deposit. Your position appears with its borrow,
+its vault share and the agents keeping it on target; **Amplify** loops a stock
+to a multiple; **Portfolio** decrypts your private balances on demand.
+
+**What was built during the hackathon, and what existed before.** Every line
+of this repository (the Anchor program, the Token-2022 confidential balance
+flows, both CRE workflows, the Data Streams integration, the web app and the
+tests) was written during the hackathon, on 6 and 7 October 2026: see the
+commit history. The product design is not new: it is the one Agama shipped on
+X Layer (EVM, Solidity) for OKX Dev Day,
+[agamafinance/agama-xlayer](https://github.com/agamafinance/agama-xlayer). The
+web app reuses Agama's visual identity and component styling from that app.
 
 ## Architecture
 

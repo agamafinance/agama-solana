@@ -268,11 +268,11 @@ export default function SolanaEarnPage() {
         </div>
 
         <p className="text-[12px] text-fg-muted">
-          Devnet: the stocks, GLDY and USDC are stand-ins minted (straight into your private balance) by the Faucet
-          tab; no xStock or GLDY faucet exists
-          on devnet, and GLDY itself is permissioned. Prices are real: a Chainlink CRE workflow reads the live xStocks
-          on Jupiter (the share price while NYSE trades, the token&apos;s own price outside it) and GLDY off Orca&apos;s
-          pool, and swaps settle at that price minus 5 bps.
+          Devnet: the stocks, GLDY and USDC are stand-ins minted straight into your private balance by the Faucet
+          tab; no xStock or GLDY faucet exists on devnet, and GLDY itself is permissioned. Prices are real: a Chainlink
+          CRE workflow prices the shares off Chainlink Data Streams, checked against the live xStock tokens on Jupiter
+          and the DEXs, and GLDY off Orca&apos;s pool checked against Data Streams gold. Swaps settle at that price
+          minus 5 bps.
         </p>
       </Panel>
     </>
