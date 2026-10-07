@@ -131,8 +131,9 @@ cron, every minute (one group of three markets per run, in turn)
   DEX pair to agree within 2% (then their mean), or comes from the one that
   answered; if they disagree, the market is skipped this run and keeps its
   last price. In session the share price leads only while it is within 3% of
-  that token price. GLDY needs the Orca pool within 3% of gold spot, or falls
-  back to spot.
+  that token price. GLDY needs the Orca pool within 3% of the gold reference,
+  Chainlink Data Streams XAU/USDT x USDT/USD (gold spot when the streams are
+  unavailable), or falls back to that reference.
 - **Chainlink Data Streams lead.** Whenever a session is live (regular, pre,
   post or overnight, as the report's `marketStatus` says, never inferred from
   timestamps), the share price comes from Chainlink Data Streams, stamped
@@ -306,6 +307,11 @@ and checked exactly.
   workflow reads Jupiter's price API, which returns both the token price and the
   underlying share's price for every xStock. Orca's API answers 403 to the CRE
   HTTP client, so GLDY is read from the whirlpool account itself.
+
+## CRE evidence
+
+Terminal output of both workflows, with the devnet transactions they wrote:
+[docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md).
 
 ## Run it
 
