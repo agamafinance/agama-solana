@@ -18,7 +18,6 @@
 import {
   address,
   createNoopSigner,
-  createSolanaRpc,
   sequentialInstructionPlan,
   singleInstructionPlan,
   type Address,
@@ -39,11 +38,12 @@ import { ConfidentialKeys } from '@solana/zk-sdk';
 import { PublicKey, type Connection } from '@solana/web3.js';
 
 import type { Step } from './batch';
-import { ata, RPC } from './config';
+import { ata } from './config';
+import { failoverKitRpc } from './rpc';
 import { PRIVATE_TOKENS, tokenByMint, type Balance, type Keys } from './privateTokens';
 import type { SolanaProvider } from './wallet';
 
-export const kitRpc = createSolanaRpc(RPC);
+export const kitRpc = failoverKitRpc();
 
 export { PRIVATE_TOKENS, tokenByMint } from './privateTokens';
 export type { Balance, Keys, PrivToken, Progress } from './privateTokens';

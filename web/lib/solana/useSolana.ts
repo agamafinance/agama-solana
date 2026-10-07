@@ -16,10 +16,11 @@ import {
   type Kind, type Stock,
 } from './config';
 import { runBatch } from './batch';
+import { failoverFetch } from './rpc';
 import type { SolanaProvider } from './wallet';
 
 const idl = idlJson as Idl;
-export const connection = new Connection(RPC, 'confirmed');
+export const connection = new Connection(RPC, { commitment: 'confirmed', fetch: failoverFetch as typeof fetch });
 /// Builds instructions only, so it needs a connection and never a wallet.
 export const program = new Program(idl, { connection });
 const coder = new BorshAccountsCoder(idl);

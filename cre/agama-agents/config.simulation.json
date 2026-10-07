@@ -17,6 +17,7 @@
   "rpcUrls": [
     "http://127.0.0.1:8910",
     "https://rpc.magicblock.app/devnet",
-    "https://api.devnet.solana.com"
+    "https://api.devnet.solana.com",
+    "https://devnet.rpcpool.com"
   ]
 }

@@ -3,11 +3,8 @@ import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from '@solana/sp
 
 import idl from './idl.json';
 
-/// The public devnet RPC rate-limits hard enough to break a page that reads a
-/// dozen accounts on mount. MagicBlock's devnet endpoint fronts the same cluster.
-/// Solana's own devnet endpoint. magicblock's devnet RPC failed the private
-/// flow's sends in preflight with no logs (they simulate fine) and answered
-/// 503 under load; this one passed the full UI e2e. 429s are retried by batch.ts.
+/// The first of the three devnet RPCs that relay each other (see rpc.ts).
+export { RPCS } from './rpc';
 export const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.devnet.solana.com';
 export const PROGRAM_ID = new PublicKey(idl.address);
 export const asset = (path: string) => `${process.env.NEXT_PUBLIC_ASSET_PREFIX ?? ''}${path}`;

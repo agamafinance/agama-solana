@@ -22,22 +22,19 @@ const extra = (() => {
   }
 })();
 // Keyed endpoints first (they have the most headroom), then the public ones.
-// `noScan`: answers getProgramAccounts with an empty list, so never asked it.
 const UPSTREAMS = [
   ...extra.map((url) => ({ url })),
   { url: "https://rpc.magicblock.app/devnet" },
   { url: "https://api.devnet.solana.com" },
   { url: "https://devnet.rpcpool.com" },
-  { url: "https://api.devnet.sonic.game", noScan: true },
 ].map((u) => ({ ...u, until: 0, ok: 0, fail: 0 }));
 
 const limited = (status, text) => status === 429 || status >= 500 || /"code":\s*(429|-32029|-32005)\b|Too many requests|rate limit/i.test(text);
 
-async function forward(body, methods) {
+async function forward(body) {
   const now = Date.now();
-  const candidates = UPSTREAMS.filter((u) => !(u.noScan && methods.includes("getProgramAccounts")));
   // Rested upstreams first, in order; benched ones only as a last resort.
-  const order = [...candidates.filter((u) => u.until <= now), ...candidates.filter((u) => u.until > now)];
+  const order = [...UPSTREAMS.filter((u) => u.until <= now), ...UPSTREAMS.filter((u) => u.until > now)];
   let last = { status: 502, text: JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "every upstream failed" } }) };
   for (const u of order) {
     try {
@@ -67,12 +64,7 @@ http
     req.on("data", (c) => chunks.push(c));
     req.on("end", async () => {
       const body = Buffer.concat(chunks).toString();
-      let methods = [];
-      try {
-        const j = JSON.parse(body);
-        methods = (Array.isArray(j) ? j : [j]).map((x) => x.method);
-      } catch {}
-      const { status, text } = await forward(body, methods);
+      const { status, text } = await forward(body);
       res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
       res.end(text);
     });

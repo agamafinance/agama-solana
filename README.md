@@ -295,11 +295,13 @@ and checked exactly.
 - **RPC failover.** Public devnet RPCs rate limit (429). The CRE CLI takes one
   RPC per chain, so the simulation target points at `scripts/rpc-proxy.mjs`, a
   local proxy that moves a limited or failing request on to the next free
-  endpoint (MagicBlock, Solana Labs, Triton, Sonic) and benches the one that
+  endpoint (MagicBlock's, Solana's own and Triton's, all three gateways to the
+  same Solana devnet) and benches the one that
   limited us; keyed free tiers (Helius, Alchemy) can be added in
   `.keys/rpc.env`. The agents workflow fails over across its own `rpcUrls`
   inside the 15 HTTP calls an execution allows, and the GLDY read across
-  `mainnetRpcs`.
+  `mainnetRpcs`. The web app relays across the same three (`web/lib/solana/rpc.ts`),
+  Solana's own first.
 - Pyth's public Hermes endpoint now answers 401 without an API key, so the
   workflow reads Jupiter's price API, which returns both the token price and the
   underlying share's price for every xStock. Orca's API answers 403 to the CRE
