@@ -1,0 +1,35 @@
+# The fallback behind the CRE workflows: every 5 minutes, push a price only for
+# a market about to go stale (the CRE workflow reprices each one every 4
+# minutes, so this does nothing while it runs) and run the permissionless
+# agents. Keeps the devnet demo alive if the machine running the CRE
+# simulator is offline. Needs the KEEPER_KEY secret (the devnet keeper keypair
+# as a JSON array).
+name: fallback-keeper
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: fallback-keeper
+  cancel-in-progress: false
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: keeper key
+        env:
+          KEEPER_KEY: ${{ secrets.KEEPER_KEY }}
+        run: mkdir -p .keys && printf '%s' "$KEEPER_KEY" > .keys/keeper.json
+      - run: ./node_modules/.bin/tsx scripts/keeper.ts --once --stale-only
+        env:
+          SOLANA_RPC: https://rpc.magicblock.app/devnet

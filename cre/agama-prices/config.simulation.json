@@ -118,5 +118,10 @@
   "mainnetRpcs": [
     "https://api.mainnet-beta.solana.com",
     "https://solana-rpc.publicnode.com"
+  ],
+  "devnetRpcs": [
+    "http://127.0.0.1:8910",
+    "https://rpc.magicblock.app/devnet",
+    "https://api.devnet.solana.com"
   ]
 }

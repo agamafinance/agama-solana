@@ -66,6 +66,8 @@ const configSchema = z.object({
 	dexscreenerUrl: z.string(),
 	/** Two token sources further apart than this and the market is skipped this run. */
 	sourceMaxDeviationBps: z.number(),
+	/** Devnet RPCs, tried in order: each market's last applied price time, so a run writes the stalest. */
+	devnetRpcs: z.array(z.string()).min(1),
 	/** Mainnet RPCs, tried in order: the GLDY price is read straight from Orca's whirlpool account. */
 	mainnetRpcs: z.array(z.string()).min(1),
 	goldSpotUrl: z.string(),
@@ -264,6 +266,14 @@ const streamsInTee = (runtime: TeeRuntime<Config>): Observation => {
 	return out
 }
 
+const pda = (seeds: Uint8Array[], program: string) => PublicKey.findProgramAddressSync(seeds, new PublicKey(program))[0]
+
+const symbolBytes = (s: string) => {
+	const b = new Uint8Array(8)
+	b.set(enc(s))
+	return b
+}
+
 /** The public sources, read by every DON node and agreed field by field. */
 const observe = (req: HTTPSendRequester, config: Config): Observation => {
 	const out: Observation = {}
@@ -275,6 +285,7 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 		out[`${m.symbol}_t`] = 0
 		out[`${m.symbol}_d`] = 0
 		out[`${m.symbol}_g`] = 0 // gold spot publish time
+		out[`${m.symbol}_pt`] = 0 // the market's last applied price time, on chain
 	}
 	// Each source on its own: one failing must not take the others down.
 	if (xs.length) {
@@ -308,6 +319,28 @@ const observe = (req: HTTPSendRequester, config: Config): Observation => {
 			}
 		} catch {}
 	}
+	try {
+		// How old each market's on-chain price is (Market.price_time, i64 at
+		// offset 97), so the DON writes the stalest markets first.
+		const program = config.solana.receiverProgramId
+		const keys = config.markets.map((m) => pda([enc('market.v2'), pda([enc('stock.v2'), symbolBytes(m.symbol)], program).toBytes()], program).toBase58())
+		const body = enc(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getMultipleAccounts', params: [keys, { encoding: 'base64', dataSlice: { offset: 97, length: 8 } }] }))
+		for (const rpc of config.devnetRpcs) {
+			try {
+				const resp = req.sendRequest({ url: rpc, method: 'POST' as const, headers: { 'Content-Type': 'application/json' }, body }).result()
+				if (resp.statusCode !== 200) continue
+				const value = JSON.parse(new TextDecoder().decode(resp.body)).result?.value
+				if (!value) continue
+				config.markets.forEach((m, i) => {
+					const b = value[i] ? fromBase64(value[i].data[0]) : undefined
+					let t = 0n
+					if (b && b.length === 8) for (let k = 7; k >= 0; k--) t = (t << 8n) | BigInt(b[k])
+					out[`${m.symbol}_pt`] = Number(t)
+				})
+				break
+			} catch {}
+		}
+	} catch {}
 	if (golds.length) {
 		let spot = 0
 		let spotTime = 0
@@ -414,13 +447,6 @@ function decide(config: Config, obs: Observation, now: Date, skipped: string[]):
 
 // ---------------------------------------------------------------------------
 
-const pda = (seeds: Uint8Array[], program: string) => PublicKey.findProgramAddressSync(seeds, new PublicKey(program))[0]
-
-const symbolBytes = (s: string) => {
-	const b = new Uint8Array(8)
-	b.set(enc(s))
-	return b
-}
 
 // The handler runs in a TEE (AWS Nitro). Data Streams is read there with the
 // API credentials; the public sources, the consensus, the report signing and
@@ -433,7 +459,7 @@ const onCron = (tee: TeeRuntime<Config>) => {
 
 	const fields = Object.fromEntries(
 		config.markets.flatMap((m) =>
-			['a', 'b', 't', 'd', 'g', 'a_ok', 'b_ok', 'd_ok'].map((k) => [`${m.symbol}_${k}`, median<number>]),
+			['a', 'b', 't', 'd', 'g', 'pt', 'a_ok', 'b_ok', 'd_ok'].map((k) => [`${m.symbol}_${k}`, median<number>]),
 		),
 	)
 	let obs: Observation
@@ -468,15 +494,15 @@ const onCron = (tee: TeeRuntime<Config>) => {
 	if (4 + 25 * n > 265 - 32 * (2 + n) - (2 + n)) throw new Error(`marketsPerReport ${n} does not fit a Solana report`)
 	const sigs: string[] = []
 
-	// One report per run, the groups taking turns (minute by minute, the same
-	// on every node). Several writes in one run hit the public devnet RPC's
-	// connection limit while the simulator polls the first one's confirmation;
-	// with 3 markets per report and 10 markets, each is refreshed every 4 min,
-	// well inside the 10 min the program allows.
-	const groups = Math.ceil(decided.length / n)
-	const turn = Math.floor(now.getTime() / 60_000) % Math.max(groups, 1)
-	for (let i = turn * n; i < Math.min(decided.length, (turn + 1) * n); i += n) {
-		const group = decided.slice(i, i + n)
+	// One report per run, for the stalest markets on chain (price time agreed
+	// by the DON's median; ties broken by symbol, the same on every node).
+	// Several writes in one run hit the public devnet RPC's connection limit
+	// while the simulator polls the first one's confirmation; with 3 markets a
+	// run and 10 markets each is refreshed about every 4 min, and a run that
+	// fails is made up by the next one rather than waiting its turn.
+	const stalest = [...decided].sort((x, y) => (obs[`${x.symbol}_pt`] ?? 0) - (obs[`${y.symbol}_pt`] ?? 0) || (x.symbol < y.symbol ? -1 : 1))
+	for (let i = 0; i < Math.min(stalest.length, n); i += n) {
+		const group = stalest.slice(i, i + n)
 		const updates: PriceUpdate[] = group.map((d) => ({
 			symbol: Array.from(symbolBytes(d.symbol)),
 			priceE8: BigInt(Math.round(d.price * 1e8)),

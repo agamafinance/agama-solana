@@ -156,7 +156,7 @@ next to the secret can do.
 ### agama-prices
 
 ```
-cron, every minute (one group of three markets per run, in turn)
+cron, every minute (the three markets with the oldest price on chain)
   in the TEE (handlerInTee, AWS Nitro), with the API secret:
     Chainlink Data      the 9 shares' regular, extended and overnight streams
       Streams           (RWA Advanced v11), one HMAC-signed bulk request; the

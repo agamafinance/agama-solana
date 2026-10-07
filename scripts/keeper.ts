@@ -10,6 +10,8 @@
 //   pnpm keeper            loop forever
 //   pnpm keeper --once     one tick, then exit
 //   --agents-only          skip the price half (anyone can run this)
+//   --stale-only           push a price only when the market is going stale
+//                          (the fallback behind the CRE workflow, on CI)
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
@@ -18,6 +20,8 @@ import { MARKETS, connection, fetchQuotes, keeperKeypair, marketAccounts, progra
 const TICK_MS = Number(process.env.TICK_MS ?? 30_000);
 const REPUSH_AGE = 240; // seconds; the program's max_age is 600
 const MAX_STEP_BPS = 1400n;
+const STALE_ONLY = process.argv.includes("--stale-only");
+const STALE_AGE = 420; // seconds: the CRE workflow reprices every 4 min
 
 const conn = connection();
 const keeper = keeperKeypair();
@@ -35,7 +39,7 @@ async function pushPrices() {
     const cur = BigInt(m.priceE8.toString());
     const age = now - Number(m.priceTime);
     const moved = cur === 0n ? true : (q.priceE8 > cur ? q.priceE8 - cur : cur - q.priceE8) * 10_000n > cur * 10n;
-    if (!moved && age < REPUSH_AGE && m.sessionOpen === q.sessionOpen) continue;
+    if (STALE_ONLY ? age < STALE_AGE : !moved && age < REPUSH_AGE && m.sessionOpen === q.sessionOpen) continue;
     let target = q.priceE8;
     if (cur > 0n) {
       const cap = (cur * MAX_STEP_BPS) / 10_000n;

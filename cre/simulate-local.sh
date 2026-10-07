@@ -55,10 +55,11 @@ local-settings:
     deployment-registry: "private"
   workflow-artifacts:
     workflow-path: "./main.ts"
-    config-path: "./config.simulation.json"
+    config-path: "./config.local.json"
     secrets-path: "../secrets.yaml"
 YAML
-restore() { C="$ROOT/cre"; mv "$C/project.yaml.bak" "$C/project.yaml"; mv "$C/agama-prices/workflow.yaml.bak" "$C/agama-prices/workflow.yaml"; rm -f "$C/project.local.yaml"; }
+node -e 'const c=require("./agama-prices/config.simulation.json"); c.devnetRpcs=["http://127.0.0.1:8899"]; console.log(JSON.stringify(c,null,2))' > agama-prices/config.local.json
+restore() { C="$ROOT/cre"; mv "$C/project.yaml.bak" "$C/project.yaml"; mv "$C/agama-prices/workflow.yaml.bak" "$C/agama-prices/workflow.yaml"; rm -f "$C/project.local.yaml" "$C/agama-prices/config.local.json"; }
 trap 'restore; kill $V 2>/dev/null; rm -rf "$L"' EXIT
 cre workflow simulate agama-prices --target local-settings --broadcast --non-interactive --trigger-index 0 2>&1 | grep -v "^\s*$" | tail -40
 cd "$ROOT"
