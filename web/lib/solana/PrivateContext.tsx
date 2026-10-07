@@ -331,16 +331,12 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
           // Built before the mint lands: minting only touches the public side,
           // so the encrypted state read now is still right when they execute.
           const shieldSteps = await c.shieldSteps(connection, address, k, minted);
-          // Two approvals: the mints first (independent, so the wallet's own
-          // simulation of each passes and it shows no warning), then the
-          // private setup, once the token accounts it builds on exist.
-          const mints = ixGroups.length ? await runBatch(provider, connection, address, ixGroups.map((ixs) => ({ ixs, label: 'mint' })), progress) : [];
-          if (!shieldSteps.length) return mints;
-          progress?.('Minted. Approve once more to move it all into your private balance...');
+          // One approval for everything: the mints, then the private setup.
+          const steps: Step[] = [...ixGroups.map((ixs) => ({ ixs, label: 'mint' })), ...shieldSteps];
           try {
-            return [...mints, ...(await runBatch(provider, connection, address, shieldSteps, progress))];
+            return await runBatch(provider, connection, address, steps, progress);
           } catch (e) {
-            if (e instanceof PartialFailure) {
+            if (e instanceof PartialFailure && e.landed.length >= ixGroups.length) {
               throw new PrivateActionError(`${e.cause}. The tokens were minted but not all shielded: shield them below.`, minted);
             }
             throw e;
