@@ -42,7 +42,7 @@ export default function SolanaPortfolioPage() {
             <Stat
               label="In the wallet, private"
               value={priv.unlocked ? usd(wallet) : 'Locked'}
-              sub={priv.unlocked ? 'USDC, stocks and GLDY at the oracle' : 'Unlock to read your private balances'}
+              sub={priv.unlocked ? 'USDC, stocks and GLDY at the oracle' : 'Private: confirm the signature to show them'}
             />
           </div>
         )}

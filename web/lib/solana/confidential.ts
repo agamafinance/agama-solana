@@ -57,11 +57,17 @@ const kaddr = (k: PublicKey): Address => address(k.toBase58());
 /// One signature over "solana-conf-bal/v1", the message every Token-2022
 /// client signs, so any other wallet app derives the same keys. Kept in
 /// memory for the session, never stored.
-export async function unlockKeys(provider: SolanaProvider): Promise<Keys> {
+export async function unlockKeys(provider: SolanaProvider): Promise<{ keys: Keys; signature: Uint8Array }> {
   if (typeof provider.signMessage !== 'function') throw new Error('This wallet cannot sign a message');
   const out = await provider.signMessage(ConfidentialKeys.signerMessage());
   const sig: Uint8Array = out instanceof Uint8Array ? out : new Uint8Array(out?.signature ?? out);
   if (sig.length !== 64) throw new Error('The wallet returned no signature');
+  return { keys: keysFromSignature(sig), signature: sig };
+}
+
+/// The keys are a pure function of the wallet's signature over the fixed
+/// message, so a signature kept for the tab's session gives them back.
+export function keysFromSignature(sig: Uint8Array): Keys {
   const keys = ConfidentialKeys.fromSignature(sig);
   const elgamal = keys.elgamal();
   return { elgamal, secret: elgamal.secret(), ae: keys.ae() };

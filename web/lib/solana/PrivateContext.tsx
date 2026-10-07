@@ -66,6 +66,7 @@ type Ctx = {
 };
 
 const C = createContext<Ctx>(null as unknown as Ctx);
+const SIG_KEY = 'agama.conf-sig.';
 
 export function PrivateProvider({ children }: { children: ReactNode }) {
   const { address, provider } = useSolanaWallet();
@@ -82,11 +83,26 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
   const key = address?.toBase58();
 
   // A different wallet or account, different keys: never carry them across.
+  // The signature that derives them is kept for this tab's session only
+  // (sessionStorage, read-only keys: they read balances, never spend), so
+  // connecting asks for it once and a reload does not ask again.
+  const asked = useRef<string | undefined>(undefined);
   useEffect(() => {
     keysRef.current = undefined;
     setKeys(undefined);
     setBalances(undefined);
     setBalancesAt(undefined);
+    if (!key) return;
+    const saved = sessionStorage.getItem(SIG_KEY + key);
+    if (saved) {
+      lib()
+        .then((c) => {
+          const k = c.keysFromSignature(Uint8Array.from(atob(saved), (ch) => ch.charCodeAt(0)));
+          keysRef.current = k;
+          setKeys(k);
+        })
+        .catch(() => sessionStorage.removeItem(SIG_KEY + key));
+    }
   }, [key]);
 
   // Balances every 15 s, backing off to 2 min while the RPC is failing.
@@ -123,14 +139,25 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
     if (!provider) throw new Error('Connect a wallet first');
     setUnlocking(true);
     try {
-      const k = await (await lib()).unlockKeys(provider);
+      const { keys: k, signature } = await (await lib()).unlockKeys(provider);
+      if (key) sessionStorage.setItem(SIG_KEY + key, btoa(String.fromCharCode(...signature)));
       keysRef.current = k;
       setKeys(k);
       return k;
     } finally {
       setUnlocking(false);
     }
-  }, [provider]);
+  }, [provider, key]);
+
+  // Native: right after the wallet connects, ask once for the signature that
+  // reads the private balances. Cancelled, the bar keeps a way to ask again.
+  useEffect(() => {
+    if (!key || !provider || keysRef.current || asked.current === key) return;
+    if (sessionStorage.getItem(SIG_KEY + key)) return;
+    asked.current = key;
+    const t = setTimeout(() => unlock().catch(() => {}), 400);
+    return () => clearTimeout(t);
+  }, [key, provider, unlock]);
 
   /// Unlock with a word of explanation first: the wallet is about to show a
   /// raw signing request, and the status line should say what it is for.
@@ -144,9 +171,10 @@ export function PrivateProvider({ children }: { children: ReactNode }) {
   );
 
   const lock = useCallback(() => {
+    if (key) sessionStorage.removeItem(SIG_KEY + key);
     keysRef.current = undefined;
     setKeys(undefined);
-  }, []);
+  }, [key]);
 
   const withLock = useCallback(<T,>(f: () => Promise<T>): Promise<T> => {
     const run = lockChain.current.then(async () => {

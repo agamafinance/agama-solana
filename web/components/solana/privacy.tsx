@@ -43,24 +43,23 @@ export function PrivacyBar({ sol }: { sol?: number } = {}) {
       </span>
       {unlocked ? (
         <span>
-          Your Agama tokens sit in confidential balances: amounts are encrypted on chain and only this wallet reads
-          them. Unlocked for this session.{' '}
+          Your balances are encrypted on chain: only this wallet reads them.{' '}
           <button onClick={lock} className="underline hover:text-fg">
-            Lock
+            Hide
           </button>
         </span>
+      ) : unlocking ? (
+        <span>Confirm the signature in your wallet to show your private balances (read only, it can never spend).</span>
       ) : (
         <span>
-          Your Agama tokens sit in confidential balances.{' '}
+          Your balances are encrypted on chain.{' '}
           <button
             onClick={() => unlock().then(() => setErr('')).catch((e) => setErr(errorText(e)))}
-            disabled={unlocking}
             className="underline hover:text-fg"
           >
-            {unlocking ? 'Sign in the wallet...' : 'Unlock to read them'}
+            Show them
           </button>{' '}
-          (one signature, kept in memory only). Whoever holds that signature can read, never spend, your private
-          amounts: sign it on this app only.
+          with one signature: it reads, never spends.
         </span>
       )}
       {unlocked && publicLeft.length > 0 && (
