@@ -225,7 +225,7 @@ async function main() {
 
   // 1. Faucet: minted straight into the private balance.
   await nav('Faucet');
-  await page.getByRole('button', { name: 'Mint test tokens, privately' }).click();
+  await page.getByRole('button', { name: 'Get the test tokens' }).click();
   await settle('faucet');
   await shot('faucet');
   await expect('faucet TSLAx', TSLA_MINT, 0n, 10n * 10n ** 8n);
@@ -270,7 +270,7 @@ async function main() {
 
   // 6. Portfolio reads the private balances.
   await nav('Portfolio');
-  await page.getByTestId('balances').waitFor({ timeout: 60_000 });
+  await page.getByTestId('held-TSLA').waitFor({ timeout: 60_000 });
   const tsla = await page.getByTestId('held-TSLA').innerText();
   console.log('portfolio TSLAx', tsla);
   if (!tsla.startsWith('10')) throw new Error(`portfolio shows ${tsla} TSLAx`);

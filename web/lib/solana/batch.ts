@@ -196,6 +196,7 @@ export async function runBatch(
       progress(`Sending ${at + 1} of ${all.length}...`);
       const raw = signed[i].serialize();
       let sig: string | undefined;
+      let limited = 0;
       // Devnet RPCs are load balanced: the preflight can land on a node that
       // has not seen the previous transaction of this batch yet, and fail with
       // no logs. A failure that does not reproduce on a second simulation is
@@ -204,9 +205,25 @@ export async function runBatch(
         try {
           sig = await conn.sendRawTransaction(raw, { skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 0 });
         } catch (e) {
+          // Every RPC rate limiting at once is congestion, not an answer:
+          // wait it out (up to about a minute) without spending an attempt.
+          if (/429|rate limit|Too many requests/i.test(String((e as Error)?.message ?? e)) && limited++ < 12) {
+            progress(`Sending ${at + 1} of ${all.length} (devnet RPCs busy, retrying)...`);
+            await sleep(5000);
+            attempt--;
+            continue;
+          }
           await sleep(2000 * (attempt + 1));
           const sim = await conn.simulateTransaction(signed[i], { sigVerify: false, commitment: 'confirmed' }).catch(() => null);
           const err = sim?.value.err ? JSON.stringify(sim.value.err) : '';
+          // A preflight that fails while a fresh simulation passes is the RPC
+          // node, not the transaction (some gateways refuse confidential
+          // transfer sends in preflight): send it without, and let follow()
+          // read the on-chain outcome.
+          if (!err && attempt >= 1) {
+            sig = await conn.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }).catch(() => undefined);
+            if (sig) break;
+          }
           if (err || attempt >= 3) {
             // The RPC's own answer, unfiltered by the client library.
             const rawAnswer = await fetch((conn as any).rpcEndpoint, {

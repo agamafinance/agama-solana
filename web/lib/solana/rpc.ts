@@ -43,7 +43,11 @@ const failoverTransport: RpcTransport = async (config) => {
   let error: unknown;
   for (const url of order()) {
     try {
-      return await transports.get(url)!(config);
+      const res = (await transports.get(url)!(config)) as { error?: { code?: number; message?: string } };
+      // Some gateways answer a rate limit as a JSON-RPC error with HTTP 200.
+      const code = res?.error?.code;
+      if (code !== 429 && code !== -32029 && code !== -32005) return res as never;
+      error = new Error(res.error?.message ?? 'rate limited');
     } catch (e) {
       const status = (e as { context?: { statusCode?: number } })?.context?.statusCode;
       // An HTTP-level failure fails over; a JSON-RPC error (a refused transaction) is the answer.
