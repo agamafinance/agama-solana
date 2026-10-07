@@ -30,8 +30,10 @@ to a multiple; **Portfolio** decrypts your private balances on demand.
 **What was built during the hackathon, and what existed before.** Every line
 of this repository (the Anchor program, the Token-2022 confidential balance
 flows, both CRE workflows, the Data Streams integration, the web app and the
-tests) was written during the hackathon, on 6 and 7 October 2026: see the
-commit history. The product design is not new: it is the one Agama shipped on
+tests) was written during the hackathon, on 6 and 7 October 2026. The first
+commit lands the program and its tests in one piece (they were iterated
+locally before the repository was created); the program's first transaction on
+devnet is from 6 October, 05:00 UTC. The product design is not new: it is the one Agama shipped on
 X Layer (EVM, Solidity) for OKX Dev Day,
 [agamafinance/agama-xlayer](https://github.com/agamafinance/agama-xlayer). The
 web app reuses Agama's visual identity and component styling from that app.
@@ -57,7 +59,7 @@ flowchart TB
 
     subgraph price["THE PRICE LAYER: CHAINLINK CRE"]
         CRE["agama-prices, Confidential Workflow<br/>Data Streams read in a TEE<br/>checked against Jupiter + DEX by DON consensus"]
-        KEEPER["Keeper script<br/>fallback anyone can run"]
+        KEEPER["Keeper script<br/>fallback, keeper key"]
     end
 
     AGENTS["Agents<br/>agama-agents CRE workflow (TEE signs)<br/>or anyone: permissionless"]
@@ -130,18 +132,26 @@ oracle, so an agent has nothing to choose and nothing to skim.
 
 Two Chainlink Runtime Environment workflows run the protocol. `agama-prices`
 prices the markets; `agama-agents` runs the agents. The keeper script stays
-only as a fallback anyone can run.
+as a fallback: anyone can run its agent half (the instructions are
+permissionless), its price half needs the keeper key.
 
 **Both are Confidential Workflows.** Each handler runs in a TEE
 (`handlerInTee`, AWS Nitro) and holds the one credential that must not leak:
 the Chainlink Data Streams API key and secret for `agama-prices` (a
 proprietary data credential: the HMAC signature is computed in the enclave),
 the agent's signing key for `agama-agents`. Only decoded prices and signed
-transactions leave the enclave. Everything that should be public and agreed
-goes through the DONs with `usingTheDons()`: reading the chain and the public
-price sources (median or identical consensus), signing the report, writing to
-Solana. So no node operator ever holds either secret, and no single enclave
-decides alone: its Data Streams price must agree with what the DON read.
+transactions leave the enclave. What should be public and agreed is asked of
+the DONs through `usingTheDons()` (where each request physically runs is the
+CRE TEE host's business, not this code's): the public price sources and the
+chain reads under median or identical consensus, the report signature, the
+Solana write. No node operator ever holds either secret. The decision itself
+runs in the enclave, and a Data Streams price is used only when it agrees with
+what the DON read (the xStock token within 3%, gold spot within 3%).
+
+Why a TEE handler and not just `confidential-http`: the SDK's confidential
+HTTP capability templates Vault secrets into a request, but Data Streams wants
+an HMAC computed over each request with the secret, which only code running
+next to the secret can do.
 
 ### agama-prices
 
@@ -158,7 +168,7 @@ cron, every minute (one group of three markets per run, in turn)
                         independent token price (Raydium, Meteora...)
     Solana mainnet RPC  Orca's GLDY/USDC whirlpool account, sqrt_price at offset 65
     gold spot           a guard on that thin pool (3% band)
-  consensus             median of every field across the nodes
+  consensus             median of every public field across the nodes
   decision, DON clock   in session or not (NYSE hours, gold 24/5), which source
   Solana write          one signed report, this minute's group of 3 markets
     -> Keystone Forwarder -> agama.on_report -> markets priced
@@ -196,11 +206,12 @@ cron, every minute (one group of three markets per run, in turn)
   simulator). Then it decodes the Borsh `PriceReport` and prices the markets
   listed after `cre` and the sysvar, with the same `apply_price` the keeper
   uses.
-- **Bounds that hold over time.** A publish time must be strictly newer than
-  the last one (a symbol repeated in a report, or two reports in one slot,
-  cannot compound the bound) and at most 15 s ahead. A move larger than 15%
-  is not refused, which would freeze the market for good after an earnings gap:
-  the price steps 15% toward it per update and converges.
+- **Bounded steps.** A publish time must be strictly newer than the last one
+  and at most 15 s ahead. A move larger than 15% is not refused, which would
+  freeze the market for good after an earnings gap: the price steps 15% toward
+  it per update and converges. The bound is per update, not per unit of time:
+  whoever holds a price key can stack updates with rising publish times (see
+  Known limitations).
 - **One bad price does not sink the report.** A price older than the one
   already there, or a market the report names without passing it, is skipped
   with a `PriceSkipped` event; the other markets of the report still update.
@@ -243,27 +254,32 @@ cron, every minute (one group of three markets per run, in turn)
 ### agama-agents
 
 ```
-cron, every minute (at :30)
-  each DON node, over HTTP:
-    getProgramAccounts   every Agama position (confirmed, so new ones count)
-    for each position    build compound (Earn) and rebalance, sign with the
-                         agent key from CRE secrets, sendTransaction
-    RPC preflight        AlreadyOnTarget / NothingToCompound refused for free
-  consensus              median of positions, acted, on target, failed
+cron, every minute (at :30), a Confidential Workflow
+  each DON node, over HTTP (finalized state, so every node reads the same):
+    getMultipleAccounts  the protocol and the ten markets
+    getProgramAccounts   every Agama position
+    plan                 which positions need compound or rebalance, with the
+                         program's own math
+  identical consensus    the nodes must return the same plan, or nothing is sent
+  in the TEE             one recent blockhash, then sign the plan with the
+                         agent key (a CRE secret that never reaches a node)
+  each DON node          sends the identical bytes; Solana keeps one; the RPC
+                         preflight refuses AlreadyOnTarget / NothingToCompound
 ```
 
 - **Why not a report through the forwarder.** An agent action needs ten
   accounts; a CRE Solana write has no address lookup tables yet and leaves
   about 265 bytes once accounts are paid. The instructions are permissionless,
   so the workflow simply is one of the signers anyone could be.
-- **Under the DON** every node sends its own signed copy: the first to land
-  acts, the others fail preflight because the position is on target by then.
+- **Under the DON** every node sends the same signed bytes: Solana lands one
+  and drops the duplicates.
 - The agent key only pays fees; positions record it as `last_agent`, which
   the app shows. Checked end to end in `cre/simulate-local.sh`: a position at
   20%, TSLA up 10%, one workflow run, the CRE agent key borrowed the difference.
 
-The old keeper (`scripts/keeper.ts`) stays as a fallback that anyone can run,
-and `push_price` as a fallback price path, bounded the same way.
+The old keeper (`scripts/keeper.ts`) stays as a fallback: its agent calls are
+permissionless, its `push_price` needs the keeper key and is bounded the same
+way as a CRE report.
 
 ## Confidential balances
 
@@ -349,6 +365,34 @@ and checked exactly.
 
 Terminal output of both workflows, with the devnet transactions they wrote:
 [docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md).
+
+## Known limitations
+
+Said plainly, for the judges and for the audit that comes after.
+
+- **The price bound is per update, not per unit of time.** `apply_price`
+  moves a price at most 15% per update, and an update only needs a newer
+  publish time (at most 15 s ahead). Whoever holds a price key (the keeper key,
+  or the simulation transmitter) can stack updates with rising publish times in
+  one transaction. Fix: store the on-chain time of the last update in the
+  market and bound the move per minute. It needs a market account migration,
+  so it is not in the hackathon build.
+- **A capped price reads as fresh.** While a price converges after a gap
+  larger than 15%, the market stores the capped value with the new publish
+  time. Fix: a converging flag that pauses new borrows until it clears.
+- **Devnet faucets are unlimited and borrowing has no per-market cap**, so
+  anyone can borrow the pool dry with faucet collateral; the admin tops it up.
+  Mainnet uses real tokens and needs debt ceilings per market.
+- **Prices and agents run from one machine** (the CRE CLI simulator) until
+  Chainlink grants Deploy Access; the transmitter and keeper keys are hot. If
+  that machine is offline for more than 10 minutes, prices go stale and the
+  program refuses new borrows and agent actions, by design.
+- **`initialize` is not tied to the upgrade authority** (it was called at
+  deploy time); Earn liquidation repays the whole debt from the vault buffer;
+  dust collateral left by a liquidation is not written off.
+- **Mainnet porting:** real USDC is a classic SPL token while this program is
+  Token-2022 only, and the real xStocks use the scaled UI amount extension, so
+  amounts must be scaled after corporate actions.
 
 ## Run it
 

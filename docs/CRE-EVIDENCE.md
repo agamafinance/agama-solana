@@ -66,13 +66,13 @@ forwarder:
 │ Simulation complete! Ready to deploy your workflow?  │
 ```
 
-Every devnet position was on target, so the DON agreed on an empty plan.
+Every devnet position was on target, so the consensus step (one simulated node) returned an empty plan.
 
 ## 3. Both workflows on a local validator, with an agent action
 
 `simulate-local.sh` deploys the program, runs agama-prices, moves a position
-off target and runs agama-agents: the DON agrees on the plan, the enclave signs
-it and the rebalance lands.
+off target and runs agama-agents: the consensus step (one simulated node) returns the plan, the
+enclave signs it and the rebalance lands.
 
 ```
 == cre workflow simulate --broadcast

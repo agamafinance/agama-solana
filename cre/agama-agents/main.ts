@@ -1,21 +1,21 @@
 // agama-agents: Agama's permissionless agents, run by Chainlink CRE instead of
 // a keeper.
 //
-// Every minute, in three steps:
+// Every minute, a Confidential Workflow in four steps:
 //   1. read (node mode, HTTP): the protocol, the ten markets and every
-//      position, plus a recent blockhash. Each node decides which positions
-//      need `compound` or `rebalance` with the program's own math, and the DON
-//      must agree on that list and on the blockhash (identical consensus). Two
-//      nodes that see different state make the run stop: nothing is sent.
-//   2. sign (DON mode): the agreed transactions, with the agent key from CRE
-//      secrets. Ed25519 is deterministic, so every node signs the same bytes.
+//      position, at finalized commitment so every node reads the same state.
+//      Each node decides which positions need `compound` or `rebalance` with
+//      the program's own math, and the DON must agree on that list (identical
+//      consensus). Nodes that see different state make the run stop.
+//   2. sign (in the TEE): one recent blockhash, then the agreed transactions,
+//      with the agent key from CRE secrets, which never reaches a node.
 //   3. send (node mode, HTTP): each node sends those identical bytes; Solana
 //      keeps one. The RPC preflight still refuses anything that turned out to
 //      have nothing to do, for free.
 //
-// HTTP calls: 3 reads in the first step and at most maxActions sends in the
-// last, each step under the 15 a CRE execution allows; a rate-limited RPC
-// fails over to the next of `rpcUrls` with whatever budget is left.
+// HTTP calls: 2 reads, 1 blockhash and at most maxActions sends, one budget of
+// 15 for the whole execution; a rate-limited RPC fails over to the next of
+// `rpcUrls` with whatever budget is left.
 //
 // Why not a signed report through the Keystone Forwarder, like the prices: an
 // agent action needs ten accounts, and a CRE Solana write has no address
@@ -126,20 +126,24 @@ const i64 = (d: Uint8Array, o: number) => BigInt.asIntN(64, u(d, o, 8))
 
 // --- JSON-RPC over the HTTP capability --------------------------------------
 
-// A CRE execution allows 15 HTTP calls: failover only spends what is left.
+// A CRE execution allows 15 HTTP calls in all: one counter per execution
+// (reset in onCron), and failover only spends what is left.
 const BUDGET = 15
 let calls = 0
 
+type Fetch = (input: { url: string; method: 'POST'; headers: Record<string, string>; body: Uint8Array }) => { statusCode: number; body: Uint8Array }
+
 /** JSON-RPC with failover: a rate limit (429, -32029), a 5xx or a dead
- *  endpoint moves on to the next URL, while the call budget allows. */
-const rpc = (req: HTTPSendRequester, urls: string[], method: string, params: unknown[], reserve = 0): any => {
+ *  endpoint moves on to the next URL, while the call budget allows. `fetch`
+ *  is a node's HTTP (node mode) or the enclave's (TEE). */
+const rpc = (fetch: Fetch, urls: string[], method: string, params: unknown[], reserve = 0): any => {
 	const body = enc(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }))
 	let last = ''
 	for (const url of urls) {
 		if (calls >= BUDGET - reserve) break
 		calls++
 		try {
-			const resp = req.sendRequest({ url, method: 'POST' as const, headers: { 'Content-Type': 'application/json' }, body }).result()
+			const resp = fetch({ url, method: 'POST' as const, headers: { 'Content-Type': 'application/json' }, body })
 			const text = new TextDecoder().decode(resp.body)
 			if (resp.statusCode === 429 || resp.statusCode >= 500 || /"code":\s*(429|-32029|-32005)\b/.test(text)) {
 				last = `${method}: HTTP ${resp.statusCode} at ${url}`
@@ -155,7 +159,7 @@ const rpc = (req: HTTPSendRequester, urls: string[], method: string, params: unk
 }
 
 type Action = { position: string; market: string; op: 'compound' | 'rebalance' }
-type Plan = { blockhash: string; actions: Action[] }
+type Plan = { actions: Action[] }
 
 const accounts = (config: Config) => {
 	const program = new PublicKey(config.programId)
@@ -188,14 +192,15 @@ const accounts = (config: Config) => {
 const plan = (req: HTTPSendRequester, config: Config, nowS: number): string => {
 	const a = accounts(config)
 	const keys = [a.protocol.toBase58(), ...a.markets.map((m) => m.market.toBase58())]
-	calls = 0
-	// Keep room for the two reads after this one.
-	const infos = rpc(req, config.rpcUrls, 'getMultipleAccounts', [keys, { encoding: 'base64', commitment: 'confirmed' }]).result.value
-	const positions = rpc(req, config.rpcUrls, 'getProgramAccounts', [
+	const fetch: Fetch = (input) => req.sendRequest(input).result()
+	// Finalized state, so every node reads the same accounts and computes the
+	// same plan; the blockhash is not part of it (it moves every slot) and is
+	// fetched once, after consensus. Each read keeps room for the next.
+	const infos = rpc(fetch, config.rpcUrls, 'getMultipleAccounts', [keys, { encoding: 'base64', commitment: 'finalized' }], 1).result.value
+	const positions = rpc(fetch, config.rpcUrls, 'getProgramAccounts', [
 		config.programId,
-		{ encoding: 'base64', commitment: 'confirmed', filters: [{ memcmp: { offset: 0, bytes: b58encode(Uint8Array.from(POSITION_DISC)) } }] },
+		{ encoding: 'base64', commitment: 'finalized', filters: [{ memcmp: { offset: 0, bytes: b58encode(Uint8Array.from(POSITION_DISC)) } }] },
 	]).result as { pubkey: string; account: { data: [string, string] } }[]
-	const blockhash = rpc(req, config.rpcUrls, 'getLatestBlockhash', [{ commitment: 'finalized' }]).result.value.blockhash as string
 
 	// Protocol (offsets checked against the IDL): cash @201, total_scaled_debt @209,
 	// borrow_index @225, last_accrual @241, rates @249.., min_borrow @265,
@@ -256,7 +261,7 @@ const plan = (req: HTTPSendRequester, config: Config, nowS: number): string => {
 		}
 	}
 	actions.sort((x, y) => (x.position + x.op < y.position + y.op ? -1 : 1))
-	return JSON.stringify({ blockhash, actions: actions.slice(0, config.maxActions) } satisfies Plan)
+	return JSON.stringify({ actions: actions.slice(0, config.maxActions) } satisfies Plan)
 }
 
 type Sent = { sent: number; landed: number; refused: number }
@@ -264,11 +269,11 @@ type Sent = { sent: number; landed: number; refused: number }
 /** Step 3, per node: send the agreed, already signed bytes. */
 const send = (req: HTTPSendRequester, config: Config, txs: string[]): Sent => {
 	const out: Sent = { sent: txs.length, landed: 0, refused: 0 }
-	calls = 0
+	const fetch: Fetch = (input) => req.sendRequest(input).result()
 	txs.forEach((tx, i) => {
 		try {
 			// Leave one call for each transaction still to send.
-			const r = rpc(req, config.rpcUrls, 'sendTransaction', [tx, { encoding: 'base64', preflightCommitment: 'confirmed' }], txs.length - i - 1)
+			const r = rpc(fetch, config.rpcUrls, 'sendTransaction', [tx, { encoding: 'base64', preflightCommitment: 'confirmed' }], txs.length - i - 1)
 			if (r.result) out.landed++
 			else out.refused++ // nothing to do after all, or another node's copy landed first
 		} catch {
@@ -286,6 +291,7 @@ const onCron = (tee: TeeRuntime<Config>) => {
 	const config = runtime.config
 	const nowS = Math.floor(runtime.now().getTime() / 1000)
 	const http = new HTTPClient()
+	calls = 0
 
 	const agreed: Plan = JSON.parse(http.sendRequest(runtime, plan, consensusIdenticalAggregation<string>())(config, nowS).result())
 	if (agreed.actions.length === 0) {
@@ -296,6 +302,9 @@ const onCron = (tee: TeeRuntime<Config>) => {
 	// Step 2, in the enclave: sign the agreed plan. The key never reaches a DON
 	// node; Ed25519 is deterministic, so the bytes are the plan's and nothing else.
 	const signer = Keypair.fromSecretKey(b58decode(tee.getSecret({ id: 'AGENT_KEY' }).result().value))
+	// One recent blockhash, read from the enclave, for the agreed plan.
+	const teeFetch: Fetch = (input) => http.sendRequest(tee, input).result()
+	const blockhash = rpc(teeFetch, config.rpcUrls, 'getLatestBlockhash', [{ commitment: 'finalized' }], agreed.actions.length).result.value.blockhash as string
 	const a = accounts(config)
 	const byMarket = new Map(a.markets.map((m) => [m.market.toBase58(), m]))
 	const txs = agreed.actions.map((act) => {
@@ -316,7 +325,7 @@ const onCron = (tee: TeeRuntime<Config>) => {
 				{ pubkey: new PublicKey(TOKEN_2022), isSigner: false, isWritable: false },
 			],
 		})
-		const tx = new Transaction({ feePayer: signer.publicKey, recentBlockhash: agreed.blockhash }).add(ix)
+		const tx = new Transaction({ feePayer: signer.publicKey, recentBlockhash: blockhash }).add(ix)
 		tx.sign(signer)
 		return b64encode(tx.serialize() as unknown as Uint8Array)
 	})

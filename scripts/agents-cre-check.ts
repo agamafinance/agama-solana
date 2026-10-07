@@ -30,7 +30,11 @@ async function prepare() {
   const up = (BigInt(m.priceE8.toString()) * 110n) / 100n;
   await keeper.methods.pushPrice(new BN(up.toString()), new BN(now + 1), true).accountsPartial({ keeper: keeperKeypair().publicKey, protocol: protocolPda, market: t.market }).rpc();
   fs.writeFileSync(STATE, JSON.stringify({ owner: user.publicKey.toBase58() }));
-  console.log("prepared: Earn 10 TSLA at 20%, then TSLA +10%");
+  // The workflow plans from finalized state (every node must read the same):
+  // wait until the price move is finalized before it runs.
+  const target = await conn.getSlot("confirmed");
+  while ((await conn.getSlot("finalized")) < target) await new Promise((r) => setTimeout(r, 1000));
+  console.log("prepared: Earn 10 TSLA at 20%, then TSLA +10% (finalized)");
 }
 
 async function verify(agentFile: string) {

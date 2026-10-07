@@ -172,14 +172,14 @@ type DsCreds = { key: string; secret: string; nowMs: number }
 /** fullReport = abi(bytes32[3] ctx, bytes blob, ...); blob = one 32-byte word
  *  per field. Word 6 is v11's mid and v3's benchmarkPrice (18 decimals), word 2
  *  the observation time, word 13 v11's marketStatus (absent from v3: 0). */
-function decodeReport(hex: string): { mid: number; status: number; at: number } {
+function decodeReport(hex: string): { mid: number; status: number; at: number; expires: number } {
 	const h = hex.replace(/^0x/, '')
 	const word = (off: number, i: number) => BigInt('0x' + h.slice((off + i * 32) * 2, (off + i * 32 + 32) * 2))
 	const lenOff = Number(word(0, 3))
 	const words = Number(word(lenOff, 0)) / 32
 	const blobOff = lenOff + 32
 	const mid = BigInt.asIntN(256, word(blobOff, 6))
-	return { mid: Number(mid / 10n ** 10n) / 1e8, status: words > 13 ? Number(word(blobOff, 13)) : 0, at: Number(word(blobOff, 2)) }
+	return { mid: Number(mid / 10n ** 10n) / 1e8, status: words > 13 ? Number(word(blobOff, 13)) : 0, at: Number(word(blobOff, 2)), expires: Number(word(blobOff, 5)) }
 }
 
 /** One signed bulk request to the Data Streams API (HMAC-SHA256 over method,
@@ -209,11 +209,20 @@ const dsBulk = (runtime: TeeRuntime<Config>, ds: DsCreds, ids: string[]): Map<st
 const streamsInTee = (runtime: TeeRuntime<Config>): Observation => {
 	const config = runtime.config
 	const out: Observation = {}
-	const ds: DsCreds = {
-		key: runtime.getSecret({ id: 'DATASTREAMS_API_KEY' }).result().value,
-		secret: runtime.getSecret({ id: 'DATASTREAMS_API_SECRET' }).result().value,
-		nowMs: runtime.now().getTime(),
+	for (const m of config.markets) out[`${m.symbol}_s_ok`] = 0
+	let ds: DsCreds
+	try {
+		ds = {
+			key: runtime.getSecret({ id: 'DATASTREAMS_API_KEY' }).result().value,
+			secret: runtime.getSecret({ id: 'DATASTREAMS_API_SECRET' }).result().value,
+			nowMs: runtime.now().getTime(),
+		}
+	} catch {
+		return out // no credentials: the public sources price the markets alone
 	}
+	const nowS = Math.floor(ds.nowMs / 1000)
+	// A report counts only while fresh and not expired.
+	const fresh = (r: { at: number; expires: number }) => nowS - r.at <= config.shareMaxAge && r.expires >= nowS
 	const streamed = config.markets.flatMap((m) => (m.kind === 'xstock' && m.streams ? [m] : []))
 	if (streamed.length) {
 		try {
@@ -226,7 +235,7 @@ const streamsInTee = (runtime: TeeRuntime<Config>): Observation => {
 				const ovn = byId.get(m.streams!.overnight.toLowerCase())
 				// marketStatus says which session is live; never the timestamps.
 				const live = reg && reg.status === 2 ? reg : ext && (ext.status === 1 || ext.status === 3) ? ext : ovn && ovn.status === 4 ? ovn : undefined
-				if (live && live.mid > 0) {
+				if (live && live.mid > 0 && fresh(live)) {
 					out[`${m.symbol}_s`] = live.mid
 					out[`${m.symbol}_ss`] = live.status
 					out[`${m.symbol}_st`] = live.at
@@ -244,7 +253,7 @@ const streamsInTee = (runtime: TeeRuntime<Config>): Observation => {
 				if (!xau || !usdt) continue
 				const x = decodeReport(xau)
 				const u = decodeReport(usdt)
-				if (x.mid > 0 && u.mid > 0) {
+				if (x.mid > 0 && u.mid > 0 && fresh(x) && fresh(u)) {
 					out[`${m.symbol}_s`] = x.mid * u.mid
 					out[`${m.symbol}_st`] = Math.min(x.at, u.at)
 				}
@@ -338,7 +347,8 @@ type Decision = { symbol: string; price: number; open: boolean; source: string; 
 function decide(config: Config, obs: Observation, now: Date, skipped: string[]): Decision[] {
 	const nowS = Math.floor(now.getTime() / 1000)
 	const out: Decision[] = []
-	// A source counts only if a majority of nodes read it: a node that could
+	// A public source counts only if a majority of nodes read it (the Data
+	// Streams fields come from the enclave, one reading): a node that could
 	// not read a source reports 0, and those zeros must not drag a median.
 	const seen = (k: string) => (obs[`${k}_ok`] ?? 0) > 0.5
 	for (const m of config.markets) {
@@ -383,8 +393,11 @@ function decide(config: Config, obs: Observation, now: Date, skipped: string[]):
 			else out.push({ symbol: m.symbol, price: token, open: false, source: `token, ${tokenSource}`, at: nowS })
 		} else {
 			const open = goldOpen(now)
-			// The gold reference: Data Streams XAU/USD when available, else gold spot.
-			const sp = seen(`${m.symbol}_s`) ? obs[`${m.symbol}_s`] : 0
+			// The gold reference: Data Streams XAU/USD (from the enclave) when it
+			// agrees with the gold spot the DON read, else gold spot alone.
+			const sp0 = seen(`${m.symbol}_s`) ? obs[`${m.symbol}_s`] : 0
+			const sp = sp0 > 0 && (b <= 0 || Math.abs(sp0 / b - 1) * 10_000 <= config.goldMaxDeviationBps) ? sp0 : 0
+			if (sp0 > 0 && sp === 0) skipped.push(`${m.symbol}: Data Streams XAU ${sp0.toFixed(2)} vs spot ${b.toFixed(2)}, falling back`)
 			if (sp > 0) {
 				const ok = a > 0 && Math.abs(a / sp - 1) * 10_000 <= config.goldMaxDeviationBps
 				out.push({ symbol: m.symbol, price: ok ? a : sp, open, source: ok ? 'Orca pool, Data Streams XAU' : 'Data Streams XAU/USD', at: ok ? nowS : Math.min(nowS, Math.round(obs[`${m.symbol}_st`])) })
