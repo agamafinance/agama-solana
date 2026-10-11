@@ -18,10 +18,14 @@ ADMIN="$LEDGER/admin.json"
 solana-keygen new --no-bip39-passphrase -s -o "$ADMIN" >/dev/null
 
 # Token-2022 as devnet runs it: the copy in the validator's genesis predates the
-# confidential instruction layout the Kit client sends.
+# confidential instruction layout the Kit client sends. Chainlink's Data Streams
+# Verifier and its accounts too: setup prices the markets with signed reports
+# (Data Streams credentials needed, see scripts/datastreams.ts).
 CLONE_URL=${CLONE_URL:-https://rpc.magicblock.app/devnet}
 ${VALIDATOR:-solana-test-validator} --reset --quiet --ledger "$LEDGER/ledger" \
   --url "$CLONE_URL" --clone-upgradeable-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb \
+  --clone-upgradeable-program Gt9S41PtjR58CbG9JhJ3J6vxesqrNAswbWYbLNTMZA3c \
+  --clone HJR45sRiFdGncL69HVzRK4HLS2SXcVW3KeTPkp2aFmWC --clone 2k3DsgwBoqrnvXKVvd7jX7aptNxdcRBdcd5HkYsGgbrb \
   --bpf-program 6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D target/deploy/agama_solana.so &
 VALIDATOR=$!
 trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$LEDGER"' EXIT
