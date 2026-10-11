@@ -1,0 +1,43 @@
+# Once a day, a judge's first visit to the live app, end to end: a brand new
+# wallet with no SOL asks the app for devnet SOL, mints the test tokens into its
+# private balance, deposits into Earn, moves the slider, closes, loops on
+# Amplify, unwinds, and reads its private Portfolio, every balance checked on
+# chain. A failure is emailed by GitHub, with the screenshots attached.
+name: e2e-daily
+on:
+  schedule:
+    - cron: "13 6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  judge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: playwright and chromium
+        run: mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm i playwright@1.61.1 >/dev/null && npx playwright install --with-deps chromium
+      - name: a judge's first visit, end to end
+        working-directory: web
+        env:
+          DRIP: "1"
+          SWEEP_TO: 2cRyqAhkY9yJRJXbGfjVSqvAHTEfUrFU8oPDHfTN3os4
+          PLAYWRIGHT_PATH: /tmp/pw/node_modules/playwright
+          SOLANA_RPC: ${{ secrets.HELIUS_RPC }}
+        run: node scripts/ui-e2e.mjs https://app.agama.finance
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: /tmp/agama-solana-*.png

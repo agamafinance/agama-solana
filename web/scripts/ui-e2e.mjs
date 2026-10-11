@@ -27,9 +27,13 @@ const { chromium } = require(process.env.PLAYWRIGHT_PATH ?? 'playwright');
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:3031').replace(/\/$/, '');
 const RPC = process.env.SOLANA_RPC ?? 'https://api.devnet.solana.com';
 const conn = new Connection(RPC, 'confirmed');
-const funder = Keypair.fromSecretKey(
-  Uint8Array.from(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.config/solana/id.json'), 'utf8'))),
-);
+// The funder pays the throwaway wallet, unless DRIP=1: then the wallet asks the
+// app's own devnet faucet, as a judge would, and no key is needed at all.
+const funder = process.env.DRIP
+  ? null
+  : Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.config/solana/id.json'), 'utf8'))));
+// Where leftovers go at the end: SWEEP_TO, else the funder.
+const sweepTo = process.env.SWEEP_TO ? new PublicKey(process.env.SWEEP_TO) : funder?.publicKey;
 const user = Keypair.generate();
 
 // ---------------------------------------------------------------------------
@@ -108,8 +112,8 @@ async function sweep(kp) {
   try {
     const bal = await conn.getBalance(kp.publicKey);
     const keep = 0.001 * LAMPORTS_PER_SOL;
-    if (bal > keep + 5000) {
-      await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: funder.publicKey, lamports: bal - keep - 5000 })), [kp]);
+    if (sweepTo && bal > keep + 5000) {
+      await sendAndConfirmTransaction(conn, new Transaction().add(SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: sweepTo, lamports: bal - keep - 5000 })), [kp]);
     }
   } catch (e) {
     console.error('sweep failed', e.message);
