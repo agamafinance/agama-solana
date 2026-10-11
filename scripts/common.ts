@@ -7,7 +7,34 @@ import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 
-export const RPC = process.env.SOLANA_RPC ?? "https://rpc.magicblock.app/devnet";
+/// RPCs in order of preference (SOLANA_RPCS, comma separated, or SOLANA_RPC):
+/// every call fails over to the next one on a rate limit, a 5xx, a timeout or a
+/// dead endpoint, and the one that failed sits out for 30 s.
+export const RPCS = (process.env.SOLANA_RPCS ?? process.env.SOLANA_RPC ?? "https://rpc.magicblock.app/devnet")
+  .split(",")
+  .map((u) => u.trim())
+  .filter(Boolean);
+export const RPC = RPCS[0];
+const benched = new Map<string, number>();
+async function failoverFetch(_input: any, init?: any): Promise<Response> {
+  const now = Date.now();
+  const order = [...RPCS.filter((u) => (benched.get(u) ?? 0) <= now), ...RPCS.filter((u) => (benched.get(u) ?? 0) > now)];
+  let last: Response | undefined;
+  let error: unknown;
+  for (const url of order) {
+    try {
+      const r = await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
+      const text = await r.clone().text();
+      if (r.status !== 429 && r.status < 500 && !/"code":\s*(429|-32029|-32005)\b/.test(text)) return r;
+      last = r;
+    } catch (e) {
+      error = e;
+    }
+    benched.set(url, Date.now() + 30_000);
+  }
+  if (last) return last;
+  throw error;
+}
 export const ROOT = path.join(__dirname, "..");
 const idl = JSON.parse(fs.readFileSync(path.join(ROOT, "idl/agama_solana.json"), "utf8"));
 export const PROGRAM_ID = new PublicKey(idl.address);
@@ -78,7 +105,7 @@ export function loadKeypair(file?: string): Keypair {
 export const keeperKeypair = () => loadKeypair(path.join(ROOT, ".keys/keeper.json"));
 
 export function connection(): Connection {
-  return new Connection(RPC, "confirmed");
+  return new Connection(RPC, { commitment: "confirmed", fetch: failoverFetch as any, disableRetryOnRateLimit: true });
 }
 
 export function programFor(wallet: Keypair, conn = connection()): anchor.Program {

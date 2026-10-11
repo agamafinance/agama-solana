@@ -41,4 +41,5 @@ jobs:
         run: mkdir -p .keys && printf '%s' "$KEEPER_KEY" > .keys/keeper.json
       - run: ./node_modules/.bin/tsx scripts/keeper.ts --minutes 340
         env:
-          SOLANA_RPC: https://rpc.magicblock.app/devnet
+          # In order of preference; each call fails over to the next one.
+          SOLANA_RPCS: ${{ secrets.HELIUS_RPC }},https://rpc.magicblock.app/devnet,https://api.devnet.solana.com
