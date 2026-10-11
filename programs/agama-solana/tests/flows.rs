@@ -1032,3 +1032,267 @@ fn bad_debt_is_written_off_not_carried() {
     assert_eq!(s.scaled_debt, 0, "the remainder is written off");
     assert_eq!(w.market(&nvda).total_scaled_debt, 0);
 }
+
+// ---------------------------------------------------------------------------
+// Chainlink Data Streams, verified on chain: real reports signed by the testnet
+// DON (tests/fixtures/reports.json), through Chainlink's own Verifier program
+// and accounts as deployed on devnet (scripts/fetch-fixtures.sh).
+// ---------------------------------------------------------------------------
+
+const VERIFIER: Pubkey = anchor_lang::pubkey!("Gt9S41PtjR58CbG9JhJ3J6vxesqrNAswbWYbLNTMZA3c");
+const ACCESS_CONTROLLER: Pubkey =
+    anchor_lang::pubkey!("2k3DsgwBoqrnvXKVvd7jX7aptNxdcRBdcd5HkYsGgbrb");
+const FIXTURES: &str = "tests/fixtures";
+
+struct Report {
+    feed: [u8; 32],
+    observed_at: i64,
+    price: f64,
+    config: Pubkey,
+    signed: Vec<u8>,
+    forged: Vec<u8>,
+}
+
+fn unhex(s: &str) -> Vec<u8> {
+    let s = s.trim_start_matches("0x");
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+fn report(name: &str) -> Report {
+    let j: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(format!("{FIXTURES}/reports.json")).unwrap())
+            .unwrap();
+    let r = &j[name];
+    Report {
+        feed: unhex(r["feed"].as_str().unwrap()).try_into().unwrap(),
+        observed_at: r["observed_at"].as_i64().unwrap(),
+        price: r["price"].as_f64().unwrap(),
+        config: r["config"].as_str().unwrap().parse().unwrap(),
+        signed: unhex(r["signed"].as_str().unwrap()),
+        forged: unhex(r["forged"].as_str().unwrap()),
+    }
+}
+
+fn verifier_account() -> Pubkey {
+    Pubkey::find_program_address(&[b"verifier"], &VERIFIER).0
+}
+
+impl World {
+    /// Chainlink's Verifier and its accounts, as dumped from devnet.
+    fn load_verifier(&mut self) {
+        self.svm
+            .add_program_from_file(VERIFIER, format!("{FIXTURES}/verifier.so"))
+            .expect("run scripts/fetch-fixtures.sh first");
+        for k in [ACCESS_CONTROLLER, verifier_account()] {
+            let data = std::fs::read(format!("{FIXTURES}/{k}.bin")).unwrap();
+            let owner: Pubkey = std::fs::read_to_string(format!("{FIXTURES}/{k}.owner"))
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            let lamports = self.svm.minimum_balance_for_rent_exemption(data.len());
+            self.svm
+                .set_account(
+                    k,
+                    solana_account::Account {
+                        lamports,
+                        data,
+                        owner,
+                        executable: false,
+                        rent_epoch: 0,
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    fn feeds_pda(&self, m: &Mkt) -> Pubkey {
+        pda(&[FEEDS_SEED, m.market.as_ref()])
+    }
+
+    fn set_feeds(
+        &mut self,
+        m: &Mkt,
+        kind: u8,
+        ids: [[u8; 32]; 3],
+        verifier: Pubkey,
+    ) -> Result<(), String> {
+        let ix = Instruction {
+            program_id: agama_solana::ID,
+            accounts: accounts::SetFeeds {
+                admin: self.admin.pubkey(),
+                protocol: self.protocol,
+                market: m.market,
+                feeds: self.feeds_pda(m),
+                system_program: anchor_lang::system_program::ID,
+            }
+            .to_account_metas(None),
+            data: instruction::SetFeeds {
+                kind,
+                ids,
+                verifier_program: verifier,
+                access_controller: ACCESS_CONTROLLER,
+            }
+            .data(),
+        };
+        let admin = self.admin.insecure_clone();
+        self.send(&[ix], &admin)
+    }
+
+    fn push_report(
+        &mut self,
+        m: &Mkt,
+        reports: &[(&[u8], Pubkey)],
+        verifier: Pubkey,
+        by: &Keypair,
+    ) -> Result<(), String> {
+        let mut metas = accounts::PushReport {
+            payer: by.pubkey(),
+            market: m.market,
+            feeds: self.feeds_pda(m),
+            verifier_program: verifier,
+            verifier_account: verifier_account(),
+            access_controller: ACCESS_CONTROLLER,
+        }
+        .to_account_metas(None);
+        for (_, config) in reports {
+            metas.push(
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(*config, false),
+            );
+        }
+        let ix = Instruction {
+            program_id: agama_solana::ID,
+            accounts: metas,
+            data: instruction::PushReport {
+                reports: reports.iter().map(|(r, _)| r.to_vec()).collect(),
+            }
+            .data(),
+        };
+        let budget =
+            solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_limit(
+                400_000,
+            );
+        self.send(&[budget, ix], by)
+    }
+}
+
+#[test]
+fn data_streams_reports_are_verified_on_chain() {
+    let mut w = World::new();
+    w.load_verifier();
+    let tsla = report("tsla_regular");
+    let overnight = report("tsla_overnight");
+    let m = w.add_market("TSLA", 3_000, 4_000, (tsla.price * 0.95 * 1e8) as u64);
+    let other = w.add_market("NVDA", 3_000, 4_000, 200 * PX);
+    let ids = [tsla.feed, [7u8; 32], overnight.feed];
+    w.set_feeds(&m, 0, ids, VERIFIER).unwrap();
+    w.set_feeds(&other, 0, [[9u8; 32]; 3], VERIFIER).unwrap();
+    let anyone = w.user();
+    w.set_time(tsla.observed_at + 5);
+
+    // Signed by the DON, but one bit of the price changed: the Verifier refuses it.
+    err_has(
+        w.push_report(&m, &[(&tsla.forged, tsla.config)], VERIFIER, &anyone),
+        "BadVerification",
+    );
+    // A program pretending to be the Verifier is refused before any call.
+    err_has(
+        w.push_report(
+            &m,
+            &[(&tsla.signed, tsla.config)],
+            Pubkey::new_unique(),
+            &anyone,
+        ),
+        "ConstraintAddress",
+    );
+    // A genuine report, but not one of this market's feeds.
+    err_has(
+        w.push_report(&other, &[(&tsla.signed, tsla.config)], VERIFIER, &anyone),
+        "WrongFeed",
+    );
+
+    // The real thing, sent by anyone: priced at the report's mid, stamped with
+    // its observation time. The fixture was taken while the market was closed,
+    // so the regular feed prices it, with the off-hours terms.
+    w.push_report(&m, &[(&tsla.signed, tsla.config)], VERIFIER, &anyone)
+        .unwrap();
+    let mk = w.market(&m);
+    assert_eq!(mk.price_time, tsla.observed_at);
+    assert!(!mk.session_open);
+    assert!(
+        ((mk.price_e8 as f64) / 1e8 - tsla.price).abs() < 1e-6,
+        "{} vs {}",
+        mk.price_e8,
+        tsla.price
+    );
+
+    // The same report again cannot move the market twice.
+    err_has(
+        w.push_report(&m, &[(&tsla.signed, tsla.config)], VERIFIER, &anyone),
+        "BadPublishTime",
+    );
+    // While closed, the overnight feed carries no live price.
+    err_has(
+        w.push_report(
+            &m,
+            &[(&overnight.signed, overnight.config)],
+            VERIFIER,
+            &anyone,
+        ),
+        "WrongSession",
+    );
+
+    // Five minutes later the report is too old for a market that has not seen it.
+    let m2 = w.add_market("AAPL", 3_500, 4_500, (tsla.price * 1e8) as u64);
+    w.set_feeds(&m2, 0, ids, VERIFIER).unwrap();
+    w.set_time(tsla.observed_at + 301);
+    err_has(
+        w.push_report(&m2, &[(&tsla.signed, tsla.config)], VERIFIER, &anyone),
+        "StaleReport",
+    );
+}
+
+#[test]
+fn gold_is_xau_usdt_times_usdt_usd_verified_on_chain() {
+    let mut w = World::new();
+    w.load_verifier();
+    let (xau, usdt) = (report("xau"), report("usdt"));
+    let m = w.add_market("XAU", 6_000, 7_000, (xau.price * 1e8) as u64);
+    w.set_feeds(&m, 1, [xau.feed, usdt.feed, [0u8; 32]], VERIFIER)
+        .unwrap();
+    let anyone = w.user();
+    w.set_time(xau.observed_at.max(usdt.observed_at) + 5);
+    // One report alone, or the two in the wrong order, do not price a cross.
+    err_has(
+        w.push_report(&m, &[(&xau.signed, xau.config)], VERIFIER, &anyone),
+        "InvalidReport",
+    );
+    err_has(
+        w.push_report(
+            &m,
+            &[(&usdt.signed, usdt.config), (&xau.signed, xau.config)],
+            VERIFIER,
+            &anyone,
+        ),
+        "WrongFeed",
+    );
+    w.push_report(
+        &m,
+        &[(&xau.signed, xau.config), (&usdt.signed, usdt.config)],
+        VERIFIER,
+        &anyone,
+    )
+    .unwrap();
+    let mk = w.market(&m);
+    let want = xau.price * usdt.price;
+    assert!(
+        ((mk.price_e8 as f64) / 1e8 - want).abs() < 0.01,
+        "{} vs {}",
+        mk.price_e8,
+        want
+    );
+    assert_eq!(mk.price_time, xau.observed_at.min(usdt.observed_at));
+}

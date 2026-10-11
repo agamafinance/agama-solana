@@ -44,4 +44,14 @@ pub enum AgamaError {
     WrongKind,
     #[msg("Too many LP shares for the pool's free cash")]
     WithdrawTooLarge,
+    #[msg("Data Streams report could not be decoded")]
+    InvalidReport,
+    #[msg("Data Streams report is not one of this market's feeds")]
+    WrongFeed,
+    #[msg("This feed does not price the market in the report's session")]
+    WrongSession,
+    #[msg("Data Streams report expired or too old")]
+    StaleReport,
+    #[msg("The Chainlink Verifier did not return the report")]
+    NotVerified,
 }

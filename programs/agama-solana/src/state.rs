@@ -14,6 +14,7 @@ pub const STOCK_SEED: &[u8] = b"stock.v2";
 pub const MARKET_SEED: &[u8] = b"market.v2";
 pub const CUSTODY_SEED: &[u8] = b"custody.v2";
 pub const POSITION_SEED: &[u8] = b"position.v2";
+pub const FEEDS_SEED: &[u8] = b"feeds";
 pub const EARN_SEED: &[u8] = b"earn";
 pub const AMPLIFY_SEED: &[u8] = b"amplify";
 
@@ -163,6 +164,21 @@ pub struct Market {
     pub max_jump_bps: u16,
     pub total_collateral: u64,
     pub total_scaled_debt: u128,
+}
+
+/// Which Chainlink Data Streams feeds price a market, and the Verifier that
+/// checks their reports. One per market, set by the admin.
+#[account]
+#[derive(InitSpace)]
+pub struct Feeds {
+    pub market: Pubkey,
+    /// `oracle::KIND_SESSIONS` (a share: regular, extended, overnight) or
+    /// `oracle::KIND_CROSS` (feed 0 times feed 1).
+    pub kind: u8,
+    pub ids: [[u8; 32]; 3],
+    pub verifier_program: Pubkey,
+    pub access_controller: Pubkey,
+    pub bump: u8,
 }
 
 impl Market {

@@ -1,10 +1,10 @@
-// The keeper: relays prices and runs the agents. Anyone can run the agent half;
-// only the price half needs the keeper key. Prices come from Chainlink Data
-// Streams, checked against the tokens themselves (see fetchQuotes).
+// The keeper: relays prices and runs the agents. It needs no privileged key:
+// prices are Chainlink Data Streams reports, verified on chain by Chainlink's
+// Verifier (see oracle.ts), and the agents' instructions are permissionless.
 //
 //   every tick (30 s)
-//     prices   push each market when it moved or is getting old; a move larger
-//              than the program's 15% bound is walked in 14% steps
+//     prices   send each market's latest signed report when the price moved or
+//              is getting old; the program steps a move over 15% (15% a time)
 //     agents   for every open position, simulate `rebalance` and `compound`,
 //              and send the ones that would do something
 //
@@ -19,11 +19,11 @@
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
-import { MARKETS, ata, connection, fetchQuotes, keeperKeypair, lpMint, marketAccounts, poolUsdc, programFor, protocolPda, rails, sendReliably, usdcMint } from "./common";
+import { latestQuotes, pushReportIxs } from "./oracle";
+import { MARKETS, ata, connection, keeperKeypair, lpMint, marketAccounts, poolUsdc, programFor, protocolPda, rails, sendReliably, usdcMint } from "./common";
 
 const TICK_MS = Number(process.env.TICK_MS ?? 30_000);
 const REPUSH_AGE = 240; // seconds; the program's max_age is 600
-const MAX_STEP_BPS = 1400n;
 const STALE_ONLY = process.argv.includes("--stale-only");
 const MINUTES = (() => {
   const i = process.argv.indexOf("--minutes");
@@ -43,29 +43,20 @@ const accounts = program.account as any;
 const log = (...a: unknown[]) => console.log(new Date().toISOString(), ...a);
 
 async function pushPrices() {
-  const quotes = await fetchQuotes();
+  const quotes = await latestQuotes();
   const now = Math.floor(Date.now() / 1000);
   for (const q of quotes) {
     const { market } = marketAccounts(q.symbol);
     const m = await accounts.market.fetch(market);
     const cur = BigInt(m.priceE8.toString());
     const age = now - Number(m.priceTime);
+    // Only a report newer than the market's price can apply.
+    if (q.publishTime <= Number(m.priceTime)) continue;
     const moved = cur === 0n ? true : (q.priceE8 > cur ? q.priceE8 - cur : cur - q.priceE8) * 10_000n > cur * MOVE_BPS;
     if (STALE_ONLY ? age < STALE_AGE : !moved && age < AGE && m.sessionOpen === q.sessionOpen) continue;
-    let target = q.priceE8;
-    if (cur > 0n) {
-      const cap = (cur * MAX_STEP_BPS) / 10_000n;
-      if (target > cur + cap) target = cur + cap;
-      if (target < cur - cap) target = cur - cap;
-    }
-    const publishTime = Math.max(q.publishTime, Number(m.priceTime) + 1);
     try {
-      const ix = await program.methods
-        .pushPrice(new BN(target.toString()), new BN(publishTime), q.sessionOpen)
-        .accountsPartial({ keeper: keeper.publicKey, protocol: rails(q.symbol).protocol, market })
-        .instruction();
-      const sig = await sendReliably(conn, [ix], [keeper]);
-      log(`price ${q.symbol} ${(Number(target) / 1e8).toFixed(2)} (${q.source})`, sig.slice(0, 16));
+      const sig = await sendReliably(conn, await pushReportIxs(program, keeper.publicKey, q), [keeper]);
+      log(`price ${q.symbol} ${(Number(q.priceE8) / 1e8).toFixed(2)} (${q.source}, verified on chain)`, sig.slice(0, 16));
     } catch (e: any) {
       log(`price ${q.symbol} failed: ${e.message?.split("\n")[0]}`);
     }

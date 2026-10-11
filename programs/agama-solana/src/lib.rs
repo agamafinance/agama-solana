@@ -15,6 +15,8 @@
 //! stock custodies and every devnet mint.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::{get_return_data, invoke};
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_2022::Token2022;
 use anchor_spl::token_interface::{self as token, Mint, TokenAccount, TransferChecked};
@@ -23,6 +25,7 @@ pub mod errors;
 pub mod math;
 pub mod mints;
 pub mod ops;
+pub mod oracle;
 pub mod state;
 
 use errors::AgamaError;
@@ -226,6 +229,110 @@ pub mod agama_solana {
         session_open: bool,
     ) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
+        let m = &mut ctx.accounts.market;
+        let price_e8 = m.apply_price(price_e8, publish_time, session_open, now)?;
+        emit!(PricePushed {
+            market: m.key(),
+            price_e8,
+            publish_time,
+            session_open
+        });
+        Ok(())
+    }
+
+    /// Admin: which Chainlink Data Streams feeds price a market, and the
+    /// Verifier (and its access controller) that checks their reports.
+    pub fn set_feeds(
+        ctx: Context<SetFeeds>,
+        kind: u8,
+        ids: [[u8; 32]; 3],
+        verifier_program: Pubkey,
+        access_controller: Pubkey,
+    ) -> Result<()> {
+        require!(
+            kind == oracle::KIND_SESSIONS || kind == oracle::KIND_CROSS,
+            AgamaError::BadParams
+        );
+        let f = &mut ctx.accounts.feeds;
+        f.market = ctx.accounts.market.key();
+        f.kind = kind;
+        f.ids = ids;
+        f.verifier_program = verifier_program;
+        f.access_controller = access_controller;
+        f.bump = ctx.bumps.feeds;
+        Ok(())
+    }
+
+    /// Anyone: price a market from Chainlink Data Streams. Each signed report
+    /// (snappy compressed, as the Verifier takes it) is verified by CPI into
+    /// Chainlink's Verifier, which checks the DON's signatures and hands the
+    /// report back; `remaining_accounts` holds each report's config account.
+    /// A share takes one report, from the feed of the live session; a cross
+    /// rate (gold) takes two, its feeds in order.
+    pub fn push_report<'info>(
+        ctx: Context<'info, PushReport<'info>>,
+        reports: Vec<Vec<u8>>,
+    ) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let f = &ctx.accounts.feeds;
+        let need = if f.kind == oracle::KIND_CROSS { 2 } else { 1 };
+        require!(
+            reports.len() == need && ctx.remaining_accounts.len() == need,
+            AgamaError::InvalidReport
+        );
+        let mut verified = Vec::with_capacity(need);
+        for (i, signed) in reports.iter().enumerate() {
+            let a = &ctx.accounts;
+            let config = &ctx.remaining_accounts[i];
+            let mut data = Vec::with_capacity(12 + signed.len());
+            data.extend_from_slice(&oracle::VERIFY_DISCRIMINATOR);
+            data.extend_from_slice(&(signed.len() as u32).to_le_bytes());
+            data.extend_from_slice(signed);
+            let ix = Instruction {
+                program_id: f.verifier_program,
+                accounts: vec![
+                    AccountMeta::new_readonly(a.verifier_account.key(), false),
+                    AccountMeta::new_readonly(a.access_controller.key(), false),
+                    AccountMeta::new_readonly(a.payer.key(), true),
+                    AccountMeta::new_readonly(config.key(), false),
+                ],
+                data,
+            };
+            invoke(
+                &ix,
+                &[
+                    a.verifier_account.to_account_info(),
+                    a.access_controller.to_account_info(),
+                    a.payer.to_account_info(),
+                    config.clone(),
+                    a.verifier_program.to_account_info(),
+                ],
+            )?;
+            let (from, out) = get_return_data().ok_or(error!(AgamaError::NotVerified))?;
+            require_keys_eq!(from, f.verifier_program, AgamaError::NotVerified);
+            let r = oracle::decode(&out)?;
+            oracle::check_fresh(&r, now)?;
+            verified.push(r);
+        }
+        let (price_e8, publish_time, session_open) = if f.kind == oracle::KIND_SESSIONS {
+            let r = verified[0];
+            let slot = f
+                .ids
+                .iter()
+                .position(|id| *id == r.feed_id)
+                .ok_or(error!(AgamaError::WrongFeed))?;
+            let open = oracle::session_price(slot, r.market_status)?;
+            (oracle::to_e8(r.price)?, r.observed_at, open)
+        } else {
+            let (b, q) = (verified[0], verified[1]);
+            require!(
+                b.feed_id == f.ids[0] && q.feed_id == f.ids[1],
+                AgamaError::WrongFeed
+            );
+            let p = oracle::to_e8(b.price)? as u128 * oracle::to_e8(q.price)? as u128 / 100_000_000;
+            let t = b.observed_at.min(q.observed_at);
+            (to_u64(p)?, t, oracle::gold_open(t))
+        };
         let m = &mut ctx.accounts.market;
         let price_e8 = m.apply_price(price_e8, publish_time, session_open, now)?;
         emit!(PricePushed {
@@ -904,6 +1011,42 @@ pub struct PushPrice<'info> {
     pub protocol: Box<Account<'info, Protocol>>,
     #[account(mut, seeds = [MARKET_SEED, market.stock_mint.as_ref()], bump = market.bump)]
     pub market: Box<Account<'info, Market>>,
+}
+
+#[derive(Accounts)]
+pub struct SetFeeds<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [PROTOCOL_SEED], bump = protocol.bump, has_one = admin @ AgamaError::NotAdmin)]
+    pub protocol: Box<Account<'info, Protocol>>,
+    #[account(seeds = [MARKET_SEED, market.stock_mint.as_ref()], bump = market.bump)]
+    pub market: Box<Account<'info, Market>>,
+    #[account(
+        init_if_needed, payer = admin, space = 8 + Feeds::INIT_SPACE,
+        seeds = [FEEDS_SEED, market.key().as_ref()], bump,
+    )]
+    pub feeds: Box<Account<'info, Feeds>>,
+    pub system_program: Program<'info, System>,
+}
+
+/// The Verifier's own accounts go through unchecked here: the Verifier checks
+/// its config PDA and the report's config account itself, and the program it
+/// is is pinned by `feeds`.
+#[derive(Accounts)]
+pub struct PushReport<'info> {
+    pub payer: Signer<'info>,
+    #[account(mut, seeds = [MARKET_SEED, market.stock_mint.as_ref()], bump = market.bump)]
+    pub market: Box<Account<'info, Market>>,
+    #[account(seeds = [FEEDS_SEED, market.key().as_ref()], bump = feeds.bump, has_one = market)]
+    pub feeds: Box<Account<'info, Feeds>>,
+    /// CHECK: pinned to the market's Verifier.
+    #[account(address = feeds.verifier_program)]
+    pub verifier_program: UncheckedAccount<'info>,
+    /// CHECK: the Verifier's config PDA, checked by the Verifier.
+    pub verifier_account: UncheckedAccount<'info>,
+    /// CHECK: pinned to the market's access controller.
+    #[account(address = feeds.access_controller)]
+    pub access_controller: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

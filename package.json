@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "snappyjs": "0.7.0",
     "typescript": "^5.7.3"
   }
 }

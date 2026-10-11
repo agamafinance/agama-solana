@@ -41,13 +41,14 @@ export function authHeaders(method: string, pathWithQuery: string, key: string, 
   };
 }
 
-export type Report = { feedId: string; observedAt: number; expiresAt: number; mid: number; marketStatus: number };
+export type Report = { feedId: string; observedAt: number; expiresAt: number; mid: number; marketStatus: number; full: string };
 
 /** fullReport = abi(bytes32[3] ctx, bytes blob, bytes32[] rs, bytes32[] ss, bytes32 vs); the blob is one
  *  32-byte word per field. Word 6 is the price (v11 mid, v3 benchmark), 18 decimals; word 13 is v11's
  *  marketStatus (0 unknown, 1 pre-market, 2 regular, 3 post-market, 4 overnight, 5 closed). */
 export function decodeReport(fullReportHex: string): Report {
-  const b = Buffer.from(fullReportHex.replace(/^0x/, ""), "hex");
+  const full = fullReportHex.replace(/^0x/, "");
+  const b = Buffer.from(full, "hex");
   const word = (buf: Buffer, i: number) => buf.subarray(i * 32, i * 32 + 32);
   const blobOffset = Number(BigInt("0x" + word(b, 3).toString("hex")));
   const blobLen = Number(BigInt("0x" + b.subarray(blobOffset, blobOffset + 32).toString("hex")));
@@ -60,6 +61,7 @@ export function decodeReport(fullReportHex: string): Report {
     expiresAt: Number(uint(5)),
     mid: Number(BigInt.asIntN(256, uint(6))) / 1e18,
     marketStatus: feedId.startsWith("0x000b") && blob.length >= 14 * 32 ? Number(uint(13)) : 0,
+    full,
   };
 }
 

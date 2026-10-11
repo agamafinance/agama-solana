@@ -42,15 +42,15 @@ to a multiple; **Portfolio** decrypts your private balances on demand.
 - **Agents need cheap, fast blocks.** `rebalance`, `compound` and `liquidate`
   are permissionless; at Solana fees and finality, keeping every position on
   target minute by minute is viable for anyone.
-- **Tested like a program, not a demo.** 14 LiteSVM flows, end to end runs on a
+- **Tested like a program, not a demo.** 16 LiteSVM flows (two through Chainlink's own Verifier), end to end runs on a
   local validator and on devnet, and a browser end to end on the live app.
 
 **What was built, and when.** The core of this repository (the Anchor program,
 the Token-2022 confidential balance flows, the Data Streams integration, the web
 app and the tests) was written on 6 and 7 October 2026, at TOKEN2049 Origins,
 where it placed second on the Solana track. Since then: the always-on keeper and
-its monitoring, and the price layer simplified to Data Streams read directly by
-the keeper (the git history has every step). The first
+its monitoring, and prices moved to Chainlink Data Streams reports verified on
+chain by Chainlink's Verifier (the git history has every step). The first
 commit lands the program and its tests in one piece (they were iterated
 locally before the repository was created); the program's first transaction on
 devnet is from 6 October, 05:00 UTC. The product design is not new: it is the one Agama shipped on
@@ -78,8 +78,9 @@ flowchart TB
     end
 
     subgraph price["THE PRICE LAYER: CHAINLINK DATA STREAMS"]
-        DS["Chainlink Data Streams<br/>9 shares by session + XAU/USD"]
-        KEEPER["Keeper, always on<br/>checks each price against<br/>the token on Jupiter + DEX"]
+        DS["Chainlink Data Streams<br/>signed reports: 9 shares by session + XAU/USD"]
+        KEEPER["Keeper, or anyone<br/>fetches the reports, holds no price key"]
+        VERIFIER["Chainlink Verifier program<br/>checks the DON's signatures"]
     end
 
     AGENTS["Agents<br/>the keeper, or anyone: permissionless"]
@@ -94,7 +95,8 @@ flowchart TB
     POS -->|"borrowed USDC"| VAULT
     AGENTS -->|"rebalance / compound / liquidate"| POS
     DS --> KEEPER
-    KEEPER -->|"push_price, bounded"| MKT
+    KEEPER -->|"push_report"| MKT
+    MKT -.->|"CPI verify"| VERIFIER
     PROTO -.-> POOL
     PROTO -.-> VAULT
 
@@ -107,7 +109,7 @@ flowchart TB
     class USER,LENDERS actor
     class EARN,AMP product
     class POS,MKT,POOL,VAULT,PROTO core
-    class DS,KEEPER oracle
+    class DS,KEEPER,VERIFIER oracle
     class AGENTS bot
 ```
 
@@ -128,10 +130,11 @@ flowchart TB
 - **The buffer goes before the liquidator.** `liquidate` first repays out of
   the position's vault shares; only if that does not restore health does the
   liquidator repay half the debt and take stock at a 5% bonus.
-- **Priced around the clock, honestly.** Chainlink Data Streams, the xStocks'
-  own data provider, price every market in its live session (regular, extended
-  or overnight; see below). On weekends the price is the xStock token's own on
-  Solana. Outside regular hours a market is flagged off-hours, so LTV and
+- **Priced by Chainlink, verified on chain.** Every price is a signed Chainlink
+  Data Streams report (the xStocks' own data provider) that the program has
+  Chainlink's Verifier check before applying it: each share in its live
+  session (regular, extended or overnight), the last close when the market is
+  shut. Outside regular hours a market is flagged off-hours, so LTV and
   threshold both tighten by 5 points. A price moves 15% at most per
   update, publish times only move forward, and only a stale price stops a
   borrow.
@@ -191,54 +194,52 @@ add one later.
 into Earn, close and shield back, lend from private, every balance decrypted
 and checked exactly.
 
-## Prices and agents: Chainlink Data Streams
+## Prices: Chainlink Data Streams, verified on chain
 
-One keeper (`scripts/keeper.ts`) prices the markets and runs the agents. It
-runs on GitHub Actions around the clock (`.github/workflows/fallback-keeper.yml`):
-each job ticks every 30 seconds for almost six hours and queues the next one
-before it starts.
+A price only reaches a market as a **signed Chainlink Data Streams report,
+verified on chain**. `push_report` takes the report as Chainlink signed it,
+calls Chainlink's Verifier program (CPI), which checks the Data Streams DON's
+signatures and hands the report back, then decodes it and applies the price.
+Anyone can send a report; nobody can choose the price.
 
 ```
-every tick (30 s)
-  Chainlink Data Streams  the 9 shares' regular, extended and overnight streams
-                          (RWA Advanced v11), one HMAC-signed bulk request; the
-                          marketStatus field picks the live session; XAU/USDT x
-                          USDT/USD for gold (v3)
-  Jupiter price API       each xStock and XAUt0: the token's own price, and the
-                          share's last print
-  DexScreener             the deepest pair of each token: a second, independent
-                          token price (Raydium, Meteora...)
-  gold spot               a guard on the gold reference
-  push_price              every market that moved 0.3% or is 7 minutes old
-  agents                  simulate rebalance and compound on every position,
-                          send the ones that would do something
+off chain (the keeper, or anyone with Data Streams access)
+  Data Streams API     the latest signed report of each feed (HMAC request)
+  pick the feed        the shares' marketStatus says which session is live
+  push_report          the report, snappy compressed as the Verifier takes it
+on chain (push_report)
+  Chainlink Verifier   CPI verify: the DON's signatures, or the call fails;
+                       the program checks the return data comes from it
+  feed                 the report's feed id must be one of the market's (set_feeds)
+  session              regular feed: regular hours or closed (the last close);
+                       extended feed: pre and post-market; overnight feed: overnight
+  fresh                not expired, observed within the last 5 minutes
+  apply_price          publish time strictly forward, at most 15% per update
 ```
 
-- **No single source decides.** A token price needs Jupiter and the DEX pair
-  to agree within 2% (then their mean), or comes from the one that answered;
-  if they disagree, the market keeps its last price.
-- **Chainlink Data Streams lead.** Whenever a session is live (regular, pre,
-  post or overnight, as the report's `marketStatus` says, never inferred from
-  timestamps), the share price comes from Chainlink Data Streams, stamped with
-  the report's observation time, provided the token agrees within 3%. Regular
-  hours get the session terms, the extended sessions the off-hours ones.
-  Weekends, when the streams are closed, fall back to the token. Gold is Data
-  Streams XAU/USDT x USDT/USD when gold spot and XAUt0 agree with it within 3%.
-  `scripts/datastreams-check.ts` prints the 29 reports on its own.
-- **Bounded on chain.** `push_price` takes the keeper key. A publish time must
-  be strictly newer than the last one and at most 15 s ahead. A move larger
-  than 15% is not refused, which would freeze the market for good after an
-  earnings gap: the price steps 15% toward it per update and converges.
-- **Prices carry their source's time.** A Data Streams price is stamped with
-  its observation, a share print with its own time; only a token price is
-  stamped with the keeper's clock.
-- **The agents are anyone.** `rebalance`, `compound` and `liquidate` take any
-  signer; the keeper is one caller among many, and `pnpm keeper --agents-only`
-  runs that half without any key.
-- **Next: verify the reports on chain.** The program could take the signed
-  Data Streams report and CPI Chainlink's Verifier on Solana, so a price is
-  checked against the Data Streams DON's signatures instead of trusted from
-  the keeper key.
+- **One feed per session.** A share has three Data Streams feeds (RWA
+  Advanced, v11): regular, extended and overnight hours. Every report carries
+  the market status; the program only takes the feed that matches it, so an
+  overnight price cannot pass for a regular one. Regular hours get the session
+  terms, every other session the off-hours ones.
+- **Gold is a cross.** XAU/USDT times USDT/USD, two reports (v3) verified in
+  the same instruction and multiplied on chain; the market is off-hours from
+  Friday 21:00 to Sunday 23:00 UTC.
+- **Bounded on chain.** A publish time must be strictly newer than the last
+  one, so a report applies once and an old one never; a move larger than 15%
+  steps toward the report, 15% per update, and converges.
+- **The keeper holds no price key.** It fetches the reports, sends
+  `push_report`, and runs the agents (`rebalance`, `compound`, `liquidate`,
+  all permissionless). `push_price`, the unverified path, is only open to the
+  admin key, for emergencies; the LiteSVM suite still uses it to move prices
+  on purpose.
+- **Tested against Chainlink's own Verifier.** The LiteSVM suite loads the
+  Verifier program and its accounts as deployed on devnet
+  (`scripts/fetch-fixtures.sh`) and real reports signed by the testnet DON
+  (`tests/fixtures/reports.json`): a report applied, the same report with one
+  bit of its price flipped refused by the Verifier (`BadVerification`), a
+  fake Verifier, another market's feed, the wrong session, a replay and a
+  stale report refused, gold priced from its two reports.
 
 ## Where it lives
 
@@ -254,7 +255,7 @@ every tick (30 s)
 
 - **Stand-in tokens.** USDC, the nine xStocks and XAUt0 are mints the program
   controls, with a public faucet: no xStock or XAUt0 faucet exists on devnet.
-  The prices are real: Data Streams, checked against the live tokens.
+  The prices are real: Chainlink Data Streams (testnet), verified on chain.
 - **Built to stay up for anyone testing it.** On devnet every market's
   `max_age` is 7 days (mainnet: minutes): the always-on keeper reprices every
   few minutes, and if it ever stops, prices freeze instead of the app refusing
@@ -266,7 +267,7 @@ every tick (30 s)
 - **The vault's coupons are minted.** There is no credit book on devnet, so when
   the vault pays out more than it took in, the difference is minted and counted
   in `coupons_paid`. It is the only place the program creates dollars.
-- **The session flag comes from Data Streams' `marketStatus`** (or the keeper's clock for gold and on weekends); the price is bounded.
+- **The session flag comes from the report's `marketStatus`** (gold: the report's time); the price is bounded.
 - **Token-2022 throughout**, like the mainnet xStocks.
 - **RPC failover.** Public devnet RPCs rate limit (429). The keeper fails over
   across `SOLANA_RPCS` (a keyed Helius endpoint, then MagicBlock's and Solana's
@@ -278,20 +279,19 @@ every tick (30 s)
 Said plainly, for the judges and for the audit that comes after.
 
 - **The price bound is per update, not per unit of time.** `apply_price`
-  moves a price at most 15% per update, and an update only needs a newer
-  publish time (at most 15 s ahead). Whoever holds the keeper key can stack updates with rising publish times in
-  one transaction. Fix: store the on-chain time of the last update in the
-  market and bound the move per minute. It needs a market account migration,
-  so it is not in the hackathon build.
+  moves a price at most 15% per update. Reports are genuine, so this only
+  matters for the admin's `push_price`, which could stack updates with rising
+  publish times in one transaction. Fix: store the on-chain time of the last
+  update in the market and bound the move per minute.
 - **A capped price reads as fresh.** While a price converges after a gap
   larger than 15%, the market stores the capped value with the new publish
   time. Fix: a converging flag that pauses new borrows until it clears.
 - **Devnet faucets are unlimited and borrowing has no per-market cap**, so
   anyone can borrow the pool dry with faucet collateral; the admin tops it up.
   Mainnet uses real tokens and needs debt ceilings per market.
-- **The keeper key is hot** and its prices are trusted, within the bounds
-  above, until the program verifies Data Streams reports on chain. With
-  devnet's 7-day `max_age`, a keeper outage only freezes prices.
+- **A market shut for the weekend keeps its last close**, while the xStock
+  tokens keep trading on Solana. That is what Data Streams reports; the
+  off-hours terms (5 points less LTV) are the margin for it.
 - **`initialize` is not tied to the upgrade authority** (it was called at
   deploy time); Earn liquidation repays the whole debt from the vault buffer;
   dust collateral left by a liquidation is not written off.
@@ -303,7 +303,7 @@ Said plainly, for the judges and for the audit that comes after.
 
 ```bash
 anchor build                      # or: cargo build-sbf --manifest-path programs/agama-solana/Cargo.toml
-cargo test                        # 14 LiteSVM flows
+./scripts/fetch-fixtures.sh && cargo test  # 16 LiteSVM flows, two through Chainlink's Verifier
 ./scripts/check.sh                # everything CI runs, before pushing
 pnpm install
 pnpm setup                        # initialize, 10 markets, first prices, seed the pool (idempotent)
@@ -312,7 +312,7 @@ pnpm e2e:local                    # throwaway validator: setup, the e2e, the age
                                   # the real keeper with prices moved on purpose (17 checks),
                                   # then the private path (12 checks). VALIDATOR=agave 4.3+
 pnpm state                        # live pool, vault, prices and their age, positions, keeper
-pnpm keeper                       # the keeper: Data Streams prices and the agents
+pnpm keeper                       # the keeper: verified Data Streams reports and the agents
 pnpm tsx scripts/datastreams-check.ts  # the latest Data Streams report of every feed
 ```
 
@@ -342,7 +342,9 @@ signer, every click a real devnet transaction.
 | | Who | What |
 |---|---|---|
 | `initialize`, `add_market`, `set_params`, `set_market` | admin | Protocol, mints, pool and vault accounts; markets and their terms |
-| `push_price` | keeper | A market's price, from Data Streams; bounded |
+| `set_feeds` | admin | A market's Data Streams feeds and the Chainlink Verifier |
+| `push_report` | anyone | A market's price from signed Data Streams reports, verified by CPI into Chainlink's Verifier; bounded |
+| `push_price` | admin key (emergency) | An unverified price; same bounds |
 | `faucet_usdc`, `faucet_stock` | anyone | Devnet funds |
 | `supply`, `withdraw` | lender | USDC in and out of the pool, LP token |
 | `earn_deposit`, `earn_set_target`, `earn_close` | owner | Open or top up at a level, move the slider, close |

@@ -130,9 +130,9 @@ export function PriceBadge({ markets }: { markets: { priceTime: number }[] }) {
         Chainlink Data Streams
       </span>
       <span>
-        Each share is priced off Chainlink Data Streams in its live session (regular, extended or overnight), checked against the xStock
-        token on Jupiter and the deepest DEX pair; gold off Data Streams XAU/USD, checked against XAUt0. A market whose sources disagree keeps
-        its last price. Last price written {ageText}.
+        Every price is a signed Chainlink Data Streams report, verified on chain by Chainlink&apos;s Verifier before the program applies it:
+        each share in its live session (regular, extended or overnight, the last close when the market is shut), gold as XAU/USDT x
+        USDT/USD. Anyone can bring a report; nobody can choose the price. Last price written {ageText}.
       </span>
     </div>
   );

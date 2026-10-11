@@ -281,9 +281,8 @@ export default function SolanaEarnPage() {
 
         <p className="text-[12px] text-fg-muted">
           Devnet: the stocks, XAUt0 and USDC are stand-ins minted straight into your private balance by the Faucet
-          tab; no xStock or XAUt0 faucet exists on devnet. Prices are real: Chainlink Data Streams for the shares,
-          checked against the live xStock tokens on Jupiter and the DEXs, and Data Streams XAU/USD for gold, checked
-          against XAUt0. Swaps settle at that price minus 5 bps.
+          tab; no xStock or XAUt0 faucet exists on devnet. Prices are real: Chainlink Data Streams reports, verified on chain by
+          Chainlink&apos;s Verifier, for the shares and for gold. Swaps settle at that price minus 5 bps.
         </p>
       </Panel>
     </>

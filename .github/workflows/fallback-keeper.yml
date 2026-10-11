@@ -5,9 +5,9 @@
 # does not depend on the cron, which GitHub fires late (hours) and disables
 # after 60 days without activity; the hourly cron only restarts a broken chain. Keeps the demo alive
 # without any machine of ours online. Needs the KEEPER_KEY secret (the devnet
-# keeper keypair as a JSON array) and the Chainlink Data Streams credentials
-# (DATASTREAMS_API_KEY, DATASTREAMS_API_SECRET); without them the markets are
-# priced off the tokens alone.
+# keeper keypair as a JSON array, it only pays fees) and the Chainlink Data
+# Streams credentials (DATASTREAMS_API_KEY, DATASTREAMS_API_SECRET) to fetch the
+# signed reports the program verifies.
 name: keeper
 on:
   schedule:

@@ -60,9 +60,9 @@ transaction that fails on chain stops the batch with the step that failed and th
 
 ## Honest about devnet
 
-The stocks, XAUt0 and USDC are stand-ins minted by the program. Prices are real: the keeper reads Chainlink
-Data Streams (the share in its live session, regular, extended or overnight, and XAU/USD for gold), checks
-them against the live xStock tokens and XAUt0 on Jupiter and the DEXs, and writes them on chain. Swaps
+The stocks, XAUt0 and USDC are stand-ins minted by the program. Prices are real: signed Chainlink Data Streams
+reports (the share in its live session, regular, extended or overnight, and XAU/USD for gold), verified on
+chain by Chainlink's Verifier before the program applies them. Swaps
 settle at the oracle price minus 5 bps.
 
 ## Run it

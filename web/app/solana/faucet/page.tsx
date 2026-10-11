@@ -68,7 +68,7 @@ export default function SolanaFaucetPage() {
           <p className="mt-4 max-w-[640px] text-[15px] text-fg-muted">
             Grab devnet SOL for fees, then take the stand-in USDC, the nine xStocks and XAUt0 in one approval, straight
             into your private balance. Solana devnet carries none of them, so these are ours: Token-2022 mints with
-            confidential transfers, priced live off Chainlink Data Streams.
+            confidential transfers, priced by Chainlink Data Streams, verified on chain.
           </p>
 
           <div className="mt-7 flex flex-wrap gap-8">

@@ -3,8 +3,9 @@
 //
 //   1. initialize   protocol PDA, devnet USDC + LP mints, pool and vault accounts
 //   2. add_market   TSLA / NVDA / AAPL / SPY stand-ins, custody per market
-//   3. push_price   first price for each, from the live xStocks
-//   4. supply       seed the pool with faucet USDC so there is something to borrow
+//   3. set_feeds    each market's Chainlink Data Streams feeds and the Verifier
+//   4. push_report  a first price for each, a signed report verified on chain
+//   5. supply       seed the pool with faucet USDC so there is something to borrow
 import path from "path";
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction, LAMPORTS_PER_SOL } from "@solana/web3.js";
@@ -14,7 +15,9 @@ import {
   ROOT,
   ata,
   connection,
-  fetchQuotes,
+  ACCESS_CONTROLLER,
+  VERIFIER,
+  sendReliably,
   keeperKeypair,
   loadKeypair,
   lpMint,
@@ -26,6 +29,7 @@ import {
   usdcMint,
   vaultUsdc,
 } from "./common";
+import { KIND_CROSS, feedConfig, feedsPda, latestQuotes, pushReportIxs } from "./oracle";
 
 const SEED_POOL_USDC = Number(process.env.SEED_POOL_USDC ?? 200_000);
 
@@ -109,16 +113,29 @@ async function main() {
     console.log("funded keeper with 0.1 SOL");
   }
 
-  const keeperProgram = programFor(keeper, conn);
-  const quotes = await fetchQuotes();
-  for (const q of quotes) {
-    const acc = marketAccounts(q.symbol);
-    const state: any = await (program.account as any).market.fetch(acc.market);
-    if (state.priceE8.toString() !== "0") continue;
-    const sig = await keeperProgram.methods
-      .pushPrice(new BN(q.priceE8.toString()), new BN(q.publishTime), q.sessionOpen)
-      .accountsPartial({ keeper: keeper.publicKey, protocol: protocolPda, market: acc.market })
+  // Chainlink Data Streams: each market's feeds and the Verifier, then a
+  // first price from a signed report, verified on chain.
+  for (const m of MARKETS) {
+    const { market } = marketAccounts(m.symbol);
+    const { kind, ids } = feedConfig(m.symbol);
+    const cur: any = await (program.account as any).feeds.fetchNullable(feedsPda(market));
+    const same =
+      cur &&
+      cur.kind === kind &&
+      JSON.stringify(cur.ids.map((x: number[]) => [...x])) === JSON.stringify(ids) &&
+      cur.verifierProgram.equals(VERIFIER) &&
+      cur.accessController.equals(ACCESS_CONTROLLER);
+    if (same) continue;
+    const sig = await program.methods
+      .setFeeds(kind, ids, VERIFIER, ACCESS_CONTROLLER)
+      .accountsPartial({ admin: admin.publicKey, protocol: protocolPda, market, feeds: feedsPda(market), systemProgram: SystemProgram.programId })
       .rpc();
+    console.log("feeds", m.symbol, kind === KIND_CROSS ? "cross" : "sessions", sig);
+  }
+  for (const q of await latestQuotes()) {
+    const state: any = await (program.account as any).market.fetch(marketAccounts(q.symbol).market);
+    if (state.priceE8.toString() !== "0") continue;
+    const sig = await sendReliably(conn, await pushReportIxs(program, admin.publicKey, q), [admin]);
     console.log("first price", q.symbol, Number(q.priceE8) / 1e8, q.source, sig);
   }
 

@@ -2152,6 +2152,101 @@
       ]
     },
     {
+      "name": "push_report",
+      "docs": [
+        "Anyone: price a market from Chainlink Data Streams. Each signed report",
+        "(snappy compressed, as the Verifier takes it) is verified by CPI into",
+        "Chainlink's Verifier, which checks the DON's signatures and hands the",
+        "report back; `remaining_accounts` holds each report's config account.",
+        "A share takes one report, from the feed of the live session; a cross",
+        "rate (gold) takes two, its feeds in order."
+      ],
+      "discriminator": [
+        69,
+        21,
+        25,
+        23,
+        34,
+        124,
+        33,
+        189
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  46,
+                  118,
+                  50
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.stock_mint",
+                "account": "Market"
+              }
+            ]
+          },
+          "relations": [
+            "feeds"
+          ]
+        },
+        {
+          "name": "feeds",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  100,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "verifier_program"
+        },
+        {
+          "name": "verifier_account"
+        },
+        {
+          "name": "access_controller"
+        }
+      ],
+      "args": [
+        {
+          "name": "reports",
+          "type": {
+            "vec": "bytes"
+          }
+        }
+      ]
+    },
+    {
       "name": "rebalance",
       "docs": [
         "Hold the level the owner picked, both ways, with a 1% band."
@@ -2288,6 +2383,136 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "set_feeds",
+      "docs": [
+        "Admin: which Chainlink Data Streams feeds price a market, and the",
+        "Verifier (and its access controller) that checks their reports."
+      ],
+      "discriminator": [
+        159,
+        12,
+        251,
+        93,
+        171,
+        89,
+        138,
+        64
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "protocol"
+          ]
+        },
+        {
+          "name": "protocol",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108,
+                  46,
+                  118,
+                  50
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116,
+                  46,
+                  118,
+                  50
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.stock_mint",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "feeds",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  100,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "kind",
+          "type": "u8"
+        },
+        {
+          "name": "ids",
+          "type": {
+            "array": [
+              {
+                "array": [
+                  "u8",
+                  32
+                ]
+              },
+              3
+            ]
+          }
+        },
+        {
+          "name": "verifier_program",
+          "type": "pubkey"
+        },
+        {
+          "name": "access_controller",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "set_market",
@@ -2804,6 +3029,19 @@
   ],
   "accounts": [
     {
+      "name": "Feeds",
+      "discriminator": [
+        137,
+        105,
+        240,
+        80,
+        75,
+        220,
+        129,
+        31
+      ]
+    },
+    {
       "name": "Market",
       "discriminator": [
         219,
@@ -3080,6 +3318,31 @@
       "code": 6020,
       "name": "WithdrawTooLarge",
       "msg": "Too many LP shares for the pool's free cash"
+    },
+    {
+      "code": 6021,
+      "name": "InvalidReport",
+      "msg": "Data Streams report could not be decoded"
+    },
+    {
+      "code": 6022,
+      "name": "WrongFeed",
+      "msg": "Data Streams report is not one of this market's feeds"
+    },
+    {
+      "code": 6023,
+      "name": "WrongSession",
+      "msg": "This feed does not price the market in the report's session"
+    },
+    {
+      "code": 6024,
+      "name": "StaleReport",
+      "msg": "Data Streams report expired or too old"
+    },
+    {
+      "code": 6025,
+      "name": "NotVerified",
+      "msg": "The Chainlink Verifier did not return the report"
     }
   ],
   "types": [
@@ -3243,6 +3506,56 @@
           {
             "name": "target_ltv_bps",
             "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Feeds",
+      "docs": [
+        "Which Chainlink Data Streams feeds price a market, and the Verifier that",
+        "checks their reports. One per market, set by the admin."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "kind",
+            "docs": [
+              "`oracle::KIND_SESSIONS` (a share: regular, extended, overnight) or",
+              "`oracle::KIND_CROSS` (feed 0 times feed 1)."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "ids",
+            "type": {
+              "array": [
+                {
+                  "array": [
+                    "u8",
+                    32
+                  ]
+                },
+                3
+              ]
+            }
+          },
+          {
+            "name": "verifier_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "access_controller",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
           }
         ]
       }

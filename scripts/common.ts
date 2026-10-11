@@ -6,7 +6,6 @@ import path from "path";
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { FEEDS, latestReports } from "./datastreams";
 
 /// RPCs in order of preference (SOLANA_RPCS, comma separated, or SOLANA_RPC):
 /// every call fails over to the next one on a rate limit, a 5xx, a timeout or a
@@ -40,7 +39,7 @@ export const ROOT = path.join(__dirname, "..");
 const idl = JSON.parse(fs.readFileSync(path.join(ROOT, "idl/agama_solana.json"), "utf8"));
 export const PROGRAM_ID = new PublicKey(idl.address);
 
-const seed = (s: string) => Buffer.from(s);
+export const seed = (s: string) => Buffer.from(s);
 export const pda = (...seeds: Buffer[]) => PublicKey.findProgramAddressSync(seeds, PROGRAM_ID)[0];
 
 export const protocolPda = pda(seed("protocol.v2"));
@@ -71,6 +70,12 @@ export const MARKETS = [
   { symbol: "META", ltv: 3000, lt: 4000, kind: "xstock", xstock: "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu" },
   { symbol: "XAU", ltv: 6000, lt: 7000, kind: "gold", xstock: "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P" },
 ] as const;
+
+/// Chainlink's Data Streams Verifier on Solana devnet, its config PDA, and the
+/// access controller it names (disabled on devnet: anyone may verify).
+export const VERIFIER = new PublicKey("Gt9S41PtjR58CbG9JhJ3J6vxesqrNAswbWYbLNTMZA3c");
+export const VERIFIER_ACCOUNT = PublicKey.findProgramAddressSync([Buffer.from("verifier")], VERIFIER)[0];
+export const ACCESS_CONTROLLER = new PublicKey("2k3DsgwBoqrnvXKVvd7jX7aptNxdcRBdcd5HkYsGgbrb");
 
 export function marketAccounts(symbol: string) {
   const stockMint = pda(seed("stock.v2"), Buffer.from(symbolBytes(symbol)));
@@ -118,152 +123,6 @@ export function rails(symbol: string) {
     vaultUsdc,
     custody: m.custody,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Prices
-// ---------------------------------------------------------------------------
-//
-// The xStocks trade on Solana mainnet around the clock. Jupiter's price API
-// returns both the token's own price and the underlying share's last price.
-// While NYSE trades we relay the share; outside it, the token, flagged
-// `session_open = false` so the program tightens the terms by the off-hours
-// buffer. Pyth's public Hermes now wants an API key, so it is not the default.
-
-export function nyseOpen(at = new Date()): boolean {
-  const ny = new Date(at.toLocaleString("en-US", { timeZone: "America/New_York" }));
-  const day = ny.getDay();
-  if (day === 0 || day === 6) return false;
-  const minutes = ny.getHours() * 60 + ny.getMinutes();
-  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
-}
-
-export type Quote = { symbol: string; priceE8: bigint; publishTime: number; sessionOpen: boolean; source: string };
-
-/// Two sources must agree within this band to be trusted (bps).
-const SOURCE_BAND_BPS = 200;
-/// Gold's references (Data Streams, gold spot, XAUt0) within this band (bps).
-const GOLD_BAND_BPS = 300;
-/// A Data Streams report or a share print older than this is not a price (s).
-const MAX_AGE_S = 120;
-
-const near = (x: number, y: number, bps: number) => x > 0 && y > 0 && Math.abs(x / y - 1) * 10_000 <= bps;
-
-/** Each source on its own: one failing must not take the others down. */
-async function settle<T>(p: Promise<T>, fallback: T, what: string): Promise<T> {
-  try {
-    return await p;
-  } catch (e: any) {
-    console.log(new Date().toISOString(), `${what} unavailable: ${e.message?.split("\n")[0] ?? e}`);
-    return fallback;
-  }
-}
-
-const json = async (url: string) => {
-  const r = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-  if (!r.ok) throw new Error(`${url.split("?")[0]} ${r.status}`);
-  return r.json();
-};
-
-/// Gold trades Sunday 18:00 to Friday 17:00, New York time.
-function goldOpen(at = new Date()): boolean {
-  const ny = new Date(at.toLocaleString("en-US", { timeZone: "America/New_York" }));
-  const d = ny.getDay(), min = ny.getHours() * 60 + ny.getMinutes();
-  return d === 6 ? false : d === 0 ? min >= 18 * 60 : d === 5 ? min < 17 * 60 : true;
-}
-
-/// The price of every market, from Chainlink Data Streams checked against the
-/// tokens themselves:
-///   shares  the Data Streams feed of the live session (regular, pre/post,
-///           overnight, as its marketStatus says) leads when the token agrees;
-///           else the share print while NYSE trades; else the token. The token
-///           is Jupiter and the deepest DEX pair averaged, and when those two
-///           disagree the market keeps its last price.
-///   gold    Data Streams XAU/USDT x USDT/USD, when gold spot and XAUt0 agree
-///           with it; else XAUt0 guarded by gold spot; else gold spot.
-export async function fetchQuotes(): Promise<Quote[]> {
-  const mints = MARKETS.map((m) => m.xstock);
-  const ids = Object.values(FEEDS).flatMap((f) => Object.values(f));
-  const [jup, dexPairs, streams, spotBody] = await Promise.all([
-    settle(json(`https://lite-api.jup.ag/price/v3?ids=${mints.join(",")}`), {} as Record<string, any>, "Jupiter"),
-    settle(json(`https://api.dexscreener.com/tokens/v1/solana/${mints.join(",")}`), [] as any[], "DexScreener"),
-    settle(latestReports(ids), new Map(), "Data Streams"),
-    settle(json("https://api.gold-api.com/price/XAU"), {} as any, "gold spot"),
-  ]);
-  const now = Math.floor(Date.now() / 1000);
-  const fresh = (r?: { observedAt: number; expiresAt: number }) => !!r && now - r.observedAt <= MAX_AGE_S && r.expiresAt >= now;
-  const stream = (id?: string) => (id ? streams.get(id.toLowerCase()) : undefined);
-  // The deepest pair per token: USDC when there is one, else any pair priced in USD.
-  const dex = (mint: string) => {
-    let best = 0, liq = 0, usdc = false;
-    for (const p of dexPairs) {
-      if (p.baseToken?.address !== mint) continue;
-      const isUsdc = p.quoteToken?.symbol === "USDC";
-      const l = Number(p.liquidity?.usd) || 0;
-      if ((isUsdc && !usdc) || (isUsdc === usdc && l > liq)) {
-        best = Number(p.priceUsd) || 0;
-        liq = l;
-        usdc = isUsdc;
-      }
-    }
-    return best;
-  };
-  const token = (mint: string): { price: number; source: string } | undefined => {
-    const a = Number(jup[mint]?.usdPrice) || 0;
-    const d = dex(mint);
-    if (a > 0 && d > 0) return near(a, d, SOURCE_BAND_BPS) ? { price: (a + d) / 2, source: "Jupiter + DEX" } : undefined;
-    if (a > 0) return { price: a, source: "Jupiter only" };
-    if (d > 0) return { price: d, source: "DEX only" };
-    return undefined;
-  };
-  const skip = (msg: string) => console.log(new Date().toISOString(), `skip ${msg}`);
-  const out: Quote[] = [];
-  const push = (symbol: string, price: number, publishTime: number, sessionOpen: boolean, source: string) =>
-    out.push({ symbol, priceE8: BigInt(Math.round(price * 1e8)), publishTime: Math.min(publishTime, now), sessionOpen, source });
-
-  for (const m of MARKETS) {
-    const t = token(m.xstock);
-    const f = FEEDS[m.symbol] ?? {};
-    if (m.kind === "xstock") {
-      if (!t) {
-        skip(`${m.symbol}: no token price, or Jupiter and DEX disagree`);
-        continue;
-      }
-      const reg = stream(f.regular), ext = stream(f.extended), ovn = stream(f.overnight);
-      // marketStatus says which session is live; never the timestamps.
-      const live = reg?.marketStatus === 2 ? reg : ext && (ext.marketStatus === 1 || ext.marketStatus === 3) ? ext : ovn?.marketStatus === 4 ? ovn : undefined;
-      if (live && fresh(live) && live.mid > 0) {
-        if (near(live.mid, t.price, (3 * SOURCE_BAND_BPS) / 2)) {
-          const label = ["", "pre-market", "regular", "post-market", "overnight"][live.marketStatus];
-          push(m.symbol, live.mid, live.observedAt, live.marketStatus === 2, `Data Streams ${label}, token ${t.source}`);
-          continue;
-        }
-        skip(`${m.symbol}: Data Streams ${live.mid.toFixed(2)} vs token ${t.price.toFixed(2)}, falling back`);
-      }
-      const q = jup[m.xstock];
-      const share = Number(q?.stockData?.price) || 0;
-      const shareAt = q?.stockData?.updatedAt ? Math.floor(Date.parse(q.stockData.updatedAt) / 1000) : 0;
-      if (nyseOpen() && share > 0 && now - shareAt < MAX_AGE_S && near(share, t.price, (3 * SOURCE_BAND_BPS) / 2)) push(m.symbol, share, shareAt, true, `share, token ${t.source}`);
-      else push(m.symbol, t.price, now, false, `token, ${t.source}`);
-    } else {
-      const open = goldOpen();
-      const x = stream(f.xau), u = stream(f.usdt);
-      const ds = x && u && fresh(x) && fresh(u) ? x.mid * u.mid : 0;
-      const spot = Number(spotBody.price) || 0;
-      if (ds > 0 && (spot <= 0 || near(ds, spot, GOLD_BAND_BPS))) {
-        if (t && !near(t.price, ds, GOLD_BAND_BPS)) {
-          skip(`${m.symbol}: XAUt0 ${t.price.toFixed(2)} vs Data Streams ${ds.toFixed(2)}`);
-          continue;
-        }
-        push(m.symbol, ds, Math.min(x!.observedAt, u!.observedAt), open, t ? `Data Streams XAU/USD, XAUt0 ${t.source}` : "Data Streams XAU/USD");
-        continue;
-      }
-      if (ds > 0) skip(`${m.symbol}: Data Streams ${ds.toFixed(2)} vs spot ${spot.toFixed(2)}, falling back`);
-      if (t && near(t.price, spot, GOLD_BAND_BPS)) push(m.symbol, t.price, now, open, `XAUt0 ${t.source}, gold spot`);
-      else if (spot > 0) push(m.symbol, spot, now, open, "gold spot");
-    }
-  }
-  return out;
 }
 
 export const fmtUsd = (x: bigint | number, decimals = 6) => (Number(x) / 10 ** decimals).toFixed(2);
