@@ -1,7 +1,9 @@
-# The always-on keeper for the devnet demo. Scheduled runs on GitHub are sparse,
-# so each job ticks for 5h40 (prices every 30 s when they move 0.3% or reach 7
-# minutes, then the permissionless agents on every position) and a new job is
-# queued every hour: one runs, the next waits its turn. Keeps the demo alive
+# The always-on keeper for the devnet demo. Each job ticks for 5h40 (prices
+# every 30 s when they move 0.3% or reach 7 minutes, then the permissionless
+# agents on every position). Its first step queues the next job, which waits its
+# turn in the concurrency group and starts the moment this one ends: the chain
+# does not depend on the cron, which GitHub fires late (hours) and disables
+# after 60 days without activity; the hourly cron only restarts a broken chain. Keeps the demo alive
 # without any machine of ours online. Needs the KEEPER_KEY secret (the devnet
 # keeper keypair as a JSON array).
 name: keeper
@@ -12,11 +14,18 @@ on:
 concurrency:
   group: keeper
   cancel-in-progress: false
+permissions:
+  actions: write
+  contents: read
 jobs:
   tick:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
+      - name: queue the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run fallback-keeper.yml --repo ${{ github.repository }} --ref ${{ github.ref_name }}
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
