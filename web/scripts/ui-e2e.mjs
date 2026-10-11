@@ -122,13 +122,20 @@ async function main() {
   if (genesis !== 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG' && !/127\.0\.0\.1|localhost/.test(RPC)) {
     throw new Error(`not devnet (genesis ${genesis})`);
   }
-  await sendAndConfirmTransaction(
-    conn,
-    new Transaction().add(
-      SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: user.publicKey, lamports: Math.min(Number(process.env.FUND_SOL ?? 0.08), 0.1) * LAMPORTS_PER_SOL }),
-    ),
-    [funder],
-  );
+  if (process.env.DRIP) {
+    // As a judge would: a wallet with no SOL asks the app's own devnet faucet.
+    const r = await fetch(`${BASE}/solana/api/drip`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: user.publicKey.toBase58() }) });
+    console.log('drip', r.status, await r.text());
+    if (!r.ok) throw new Error('drip failed');
+  } else {
+    await sendAndConfirmTransaction(
+      conn,
+      new Transaction().add(
+        SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: user.publicKey, lamports: Math.min(Number(process.env.FUND_SOL ?? 0.08), 0.1) * LAMPORTS_PER_SOL }),
+      ),
+      [funder],
+    );
+  }
   console.log('test wallet', user.publicKey.toBase58());
 
   const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });

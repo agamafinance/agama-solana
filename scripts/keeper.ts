@@ -16,9 +16,9 @@
 //                          on GitHub Actions: one long run per job, relaunched
 //                          hourly); pushes on a 0.3% move or at 7 minutes old
 import { BN } from "@coral-xyz/anchor";
-import { PublicKey, Transaction } from "@solana/web3.js";
-import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
-import { MARKETS, connection, fetchQuotes, keeperKeypair, marketAccounts, programFor, rails, sendReliably } from "./common";
+import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
+import { MARKETS, ata, connection, fetchQuotes, keeperKeypair, lpMint, marketAccounts, poolUsdc, programFor, protocolPda, rails, sendReliably, usdcMint } from "./common";
 
 const TICK_MS = Number(process.env.TICK_MS ?? 30_000);
 const REPUSH_AGE = 240; // seconds; the program's max_age is 600
@@ -103,6 +103,28 @@ async function runAgents() {
   }
 }
 
+/// Devnet only: the faucets are open, so anyone can borrow the pool dry with
+/// faucet collateral. Below 150,000 USDC of cash the keeper mints stand-in USDC
+/// and supplies it, so Earn and Amplify always have something to borrow.
+const POOL_FLOOR = BigInt(process.env.KEEPER_POOL_FLOOR ?? 150_000) * 1_000_000n;
+async function topUpPool() {
+  const p: any = await accounts.protocol.fetch(protocolPda);
+  const cash = BigInt(p.cash.toString());
+  if (cash >= POOL_FLOOR) return;
+  const sys = { tokenProgram: TOKEN_2022_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId };
+  const ixs = [];
+  for (let i = 0; i < 8; i++)
+    ixs.push(await program.methods.faucetUsdc().accountsPartial({ user: keeper.publicKey, protocol: protocolPda, usdcMint, userUsdc: ata(keeper.publicKey, usdcMint), ...sys }).instruction());
+  ixs.push(
+    await program.methods
+      .supply(new BN(80_000).mul(new BN(1_000_000)))
+      .accountsPartial({ user: keeper.publicKey, protocol: protocolPda, usdcMint, lpMint, poolUsdc, userUsdc: ata(keeper.publicKey, usdcMint), userLp: ata(keeper.publicKey, lpMint), ...sys })
+      .instruction(),
+  );
+  const sig = await sendReliably(conn, ixs, [keeper]);
+  log(`pool topped up: ${Number(cash) / 1e6} USDC of cash + 80,000`, sig.slice(0, 16));
+}
+
 const AGENTS_ONLY = process.argv.includes("--agents-only");
 
 async function tick() {
@@ -115,6 +137,11 @@ async function tick() {
     await runAgents();
   } catch (e: any) {
     log("agents:", e.message);
+  }
+  try {
+    if (!AGENTS_ONLY) await topUpPool();
+  } catch (e: any) {
+    log("pool:", e.message);
   }
 }
 

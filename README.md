@@ -18,8 +18,9 @@ grows is your share count, not a stablecoin balance.
 | Live app | https://app.agama.finance/solana (Solana devnet; Phantom, Backpack or Solflare) |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) on **devnet** |
 
-**Try it without help.** Open the app with Phantom set to devnet (a little
-devnet SOL from faucet.solana.com pays the fees), hit **Faucet** (USDC, the nine
+**Try it without help.** Open the app with Phantom, Backpack or Solflare set to
+devnet. No devnet SOL? The app sends 0.1 to any empty wallet (**Send me SOL**
+on the Faucet page). Hit **Faucet** (USDC, the nine
 stocks and GLDY land straight into your private balance), then **Earn**: pick a
 stock, an amount and a level, deposit. Your position appears with its borrow,
 its vault share and the agents keeping it on target; **Amplify** loops a stock
@@ -363,6 +364,12 @@ Terminal output of both workflows, with the devnet transactions they wrote:
   controls, with a public faucet: no xStock or GLDY faucet exists on devnet, and
   the real GLDY is permissioned (frozen-by-default accounts behind Streamex's
   KYC allowlist). The prices are real: they track the live tokens.
+- **Built to stay up for anyone testing it.** On devnet every market's
+  `max_age` is 7 days (mainnet: minutes): the always-on keeper reprices every
+  few minutes, and if it ever stops, prices freeze instead of the app refusing
+  every deposit. The keeper also refills the USDC pool when faucet collateral
+  drains it, and an hourly health check (`.github/workflows/health.yml`) fails
+  loudly if a price, a wallet or the app goes wrong.
 - **Swaps settle at the oracle price minus 5 bps.** Devnet has no xStock
   liquidity. On mainnet that leg is a Jupiter route.
 - **The vault's coupons are minted.** There is no credit book on devnet, so when
@@ -406,8 +413,8 @@ Said plainly, for the judges and for the audit that comes after.
   Deploy Access, and the transmitter and keeper keys are hot. Between runs, an
   always-on keeper on GitHub Actions (`.github/workflows/fallback-keeper.yml`)
   prices every market from the xStock tokens themselves and runs the agents,
-  so the devnet demo never goes stale. If both stop for more than 10 minutes,
-  the program refuses new borrows and agent actions, by design.
+  so the devnet demo never goes stale; with devnet's 7-day `max_age`, even an
+  outage of both only freezes prices.
 - **`initialize` is not tied to the upgrade authority** (it was called at
   deploy time); Earn liquidation repays the whole debt from the vault buffer;
   dust collateral left by a liquidation is not written off.

@@ -1,0 +1,32 @@
+# Hourly health check of the live devnet demo. A failed run is emailed by
+# GitHub: every market priced within 30 minutes, the app answering, the keeper
+# and the drip wallet funded, the keeper chain running.
+name: health
+on:
+  schedule:
+    - cron: "37 * * * *"
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: demo health
+        env:
+          SOLANA_RPCS: ${{ secrets.HELIUS_RPC }},https://rpc.magicblock.app/devnet,https://api.devnet.solana.com
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./node_modules/.bin/tsx scripts/health.ts
+          gh run list --repo ${{ github.repository }} --workflow fallback-keeper.yml --status in_progress --limit 1 --json databaseId --jq 'length' | grep -q 1 || { echo "keeper chain not running"; exit 1; }
