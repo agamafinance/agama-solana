@@ -20,4 +20,4 @@ async function main() {
   console.log(`${byId.size} reports for ${ids.length} feeds`);
 }
 
-main().catch((e) => { console.error(e.message ?? e); process.exit(1); });
+main().then(() => process.exit(0)).catch((e) => { console.error(e.message ?? e); process.exit(1); });

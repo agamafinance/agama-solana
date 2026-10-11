@@ -46,4 +46,4 @@ async function main() {
   console.log(Object.entries(out).map(([k, v]: any) => `${k} ${v.price} status ${v.market_status} config ${v.config}`).join("\n"));
 }
 
-main().catch((e) => { console.error(e.message ?? e); process.exit(1); });
+main().then(() => process.exit(0)).catch((e) => { console.error(e.message ?? e); process.exit(1); });

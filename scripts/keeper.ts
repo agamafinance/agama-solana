@@ -154,7 +154,7 @@ async function main() {
   setInterval(tick, TICK_MS);
 }
 
-main().catch((e) => {
+main().then(() => process.exit(0)).catch((e) => {
   console.error(e);
   process.exit(1);
 });

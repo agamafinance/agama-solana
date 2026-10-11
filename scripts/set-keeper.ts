@@ -28,7 +28,7 @@ async function main() {
   const q: any = await (program.account as any).protocol.fetch(protocolPda);
   console.log("keeper", p.keeper.toBase58(), "->", q.keeper.toBase58(), sig.slice(0, 16));
 }
-main().catch((e) => {
+main().then(() => process.exit(0)).catch((e) => {
   console.error(e);
   process.exit(1);
 });

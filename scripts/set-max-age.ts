@@ -31,7 +31,7 @@ async function main() {
     console.log(m.symbol, "max_age", Number(a.maxAge), "->", Number(b.maxAge), "ltv", b.ltvBps, "lt", b.ltBps, sig.slice(0, 16));
   }
 }
-main().catch((e) => {
+main().then(() => process.exit(0)).catch((e) => {
   console.error(e);
   process.exit(1);
 });
