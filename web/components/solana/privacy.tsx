@@ -1,6 +1,5 @@
 'use client';
 
-import { requestDrip } from '@/lib/solana/drip';
 import { useState } from 'react';
 
 import { usePrivate, PrivateActionError, type PublicLeft } from '@/lib/solana/PrivateContext';
@@ -18,7 +17,6 @@ const amountText = (l: PublicLeft) => {
 /// are unlocked for this session or not, and what the signature means.
 export function PrivacyBar({ sol }: { sol?: number } = {}) {
   const { address } = useSolanaWallet();
-  const [dripText, setDripText] = useState('');
   const { unlocked, unlocking, unlock, lock, balances, busy, shield, balancesError, balancesAt } = usePrivate();
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
@@ -29,18 +27,14 @@ export function PrivacyBar({ sol }: { sol?: number } = {}) {
     <>
     {sol !== undefined && sol < 0.05 && (
       <div className="rounded-2xl border border-[#c98a2b]/40 bg-[#c98a2b]/10 px-4 py-3 text-[13px] text-fg" data-testid="devnet-notice">
-        Agama runs on <b>Solana devnet</b> and this wallet has no devnet SOL for fees.{' '}
-        <button
-          onClick={() => {
-            setDripText('Sending...');
-            requestDrip(address.toBase58()).then((r) => setDripText(r.text));
-          }}
-          className="font-medium underline"
-        >
-          Send me 0.1 devnet SOL
+        Agama runs on <b>Solana devnet</b> and this wallet has little or no devnet SOL for fees. In Phantom: Settings, Developer
+        Settings, Testnet Mode on, then Solana Devnet. Get devnet SOL at{' '}
+        <a href="https://faucet.solana.com" target="_blank" rel="noreferrer" className="underline">faucet.solana.com</a>{' '}
+        for{' '}
+        <button onClick={() => navigator.clipboard?.writeText(address.toBase58())} className="underline" title="Copy your address">
+          {address.toBase58().slice(0, 4)}...{address.toBase58().slice(-4)} (copy)
         </button>
-        {dripText ? ` ${dripText}` : ''} Then open the Faucet tab. (In Phantom: Settings, Developer Settings, Testnet
-        Mode on, then Solana Devnet.)
+        , then open the Faucet tab.
       </div>
     )}
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl bg-[#254839]/[0.05] px-4 py-3 text-[12px] text-fg-muted" data-testid="privacy-bar">

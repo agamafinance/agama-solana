@@ -19,8 +19,7 @@ grows is your share count, not a stablecoin balance.
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) on **devnet** |
 
 **Try it without help.** Open the app with Phantom, Backpack or Solflare set to
-devnet. No devnet SOL? The app sends 0.1 to any empty wallet (**Send me SOL**
-on the Faucet page). Hit **Faucet** (USDC, the nine
+devnet (a little devnet SOL from faucet.solana.com pays the fees), hit **Faucet** (USDC, the nine
 stocks and GLDY land straight into your private balance), then **Earn**: pick a
 stock, an amount and a level, deposit. Your position appears with its borrow,
 its vault share and the agents keeping it on target; **Amplify** loops a stock

@@ -10,7 +10,6 @@ import { usePrivate, type PublicLeft } from '@/lib/solana/PrivateContext';
 import { useSolanaWallet } from '@/lib/solana/WalletProvider';
 import { ix, usd, useSnapshot } from '@/lib/solana/useSolana';
 import { ActionStatus, statusFromError } from '@/components/solana/privacy';
-import { requestDrip } from '@/lib/solana/drip';
 import { Step } from '@/components/solana/ui';
 
 const SOL_FAUCET = 'https://faucet.solana.com';
@@ -22,15 +21,6 @@ export default function SolanaFaucetPage() {
   const busy = priv.busy;
   const [status, setStatus] = useState<{ text: string; sig?: string; left?: PublicLeft[] }>();
   const [copied, setCopied] = useState(false);
-  const [drip, setDrip] = useState<{ busy: boolean; text?: string }>({ busy: false });
-  const lowSol = !!address && !!snap && snap.sol < 0.05;
-  async function getSol() {
-    if (!address) return;
-    setDrip({ busy: true });
-    const r = await requestDrip(address.toBase58());
-    setDrip({ busy: false, text: r.text });
-    refresh();
-  }
 
   const copyAddress = async () => {
     if (!address) return;
@@ -104,22 +94,9 @@ export default function SolanaFaucetPage() {
               <img src={asset('/solana.svg')} alt="" className="h-10 w-10 shrink-0 rounded-full" />
             }
             title="SOL for fees"
-            blurb={lowSol
-              ? 'Solana devnet transactions are paid in SOL, and this wallet has none: one click sends it 0.1 devnet SOL, enough for the whole demo.'
-              : 'Solana devnet transactions are paid in SOL. This wallet has enough; more at the Solana faucet if you need it.'}
+            blurb="Solana devnet transactions are paid in SOL. Grab some from the Solana faucet (0.05 is plenty), it is the one thing here nobody can mint for you."
           >
-            {lowSol ? (
-              <button
-                type="button"
-                onClick={getSol}
-                disabled={drip.busy}
-                className="inline-flex h-11 w-[184px] items-center justify-center whitespace-nowrap rounded-full bg-[#254839] px-4 text-[14px] font-medium text-[#fdf8ed] hover:bg-[#1F3D31] disabled:opacity-45"
-              >
-                {drip.busy ? 'Sending' : 'Send me SOL'}
-              </button>
-            ) : (
-              <FaucetLink href={SOL_FAUCET} label="Open SOL faucet" />
-            )}
+            <FaucetLink href={SOL_FAUCET} label="Open SOL faucet" />
           </StepRow>
 
           <StepRow
@@ -162,7 +139,6 @@ export default function SolanaFaucetPage() {
               {copied ? 'Copied!' : 'Copy address'}
             </button>
           </p>
-          {drip.text && <p className="text-[12px] text-fg-muted" data-testid="drip-status">{drip.text}</p>}
           {!busy && <ActionStatus status={status} />}
 
           <Link href="/solana" className="group mt-6 flex items-center gap-4 rounded-2xl bg-[#254839] px-5 py-4">

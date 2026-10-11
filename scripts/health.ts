@@ -17,7 +17,7 @@ async function main() {
     console.log(m.symbol.padEnd(6), `${age}s old`);
     if (age > 1800) problems.push(`${m.symbol} price ${age}s old`);
   }
-  for (const [name, key, min] of [["keeper", KEEPER, 0.3], ["drip", DRIP, 0.3]] as const) {
+  for (const [name, key, min] of [["keeper", KEEPER, 0.3], ["e2e funder", DRIP, 0.3]] as const) {
     const sol = (await conn.getBalance(key)) / LAMPORTS_PER_SOL;
     console.log(name, sol.toFixed(3), "SOL");
     if (sol < min) problems.push(`${name} wallet low: ${sol.toFixed(3)} SOL`);

@@ -1,5 +1,5 @@
 # Once a day, a judge's first visit to the live app, end to end: a brand new
-# wallet with no SOL asks the app for devnet SOL, mints the test tokens into its
+# wallet (funded with a little devnet SOL from a test wallet) mints the test tokens into its
 # private balance, deposits into Earn, moves the slider, closes, loops on
 # Amplify, unwinds, and reads its private Portfolio, every balance checked on
 # chain. A failure is emailed by GitHub, with the screenshots attached.
@@ -31,8 +31,7 @@ jobs:
       - name: a judge's first visit, end to end
         working-directory: web
         env:
-          DRIP: "1"
-          SWEEP_TO: 2cRyqAhkY9yJRJXbGfjVSqvAHTEfUrFU8oPDHfTN3os4
+          FUNDER_KEY: ${{ secrets.E2E_FUNDER_KEY }}
           PLAYWRIGHT_PATH: /tmp/pw/node_modules/playwright
           SOLANA_RPC: ${{ secrets.HELIUS_RPC }}
         run: node scripts/ui-e2e.mjs https://app.agama.finance
