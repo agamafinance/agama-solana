@@ -292,7 +292,12 @@ async function main() {
   console.log('PASS');
 }
 
-main().finally(() => sweep(user)).catch(async (e) => {
+// Exit explicitly: an RPC websocket left open by the final transfer would keep
+// the process alive (and a CI job running until its timeout).
+main()
+  .finally(() => sweep(user))
+  .then(() => process.exit(0))
+  .catch(async (e) => {
   console.error('FAIL', e.message ?? e);
   try {
     const text = await globalThis.__page?.evaluate(() => document.body.innerText);
