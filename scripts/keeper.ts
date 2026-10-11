@@ -11,7 +11,10 @@
 //   pnpm keeper --once     one tick, then exit
 //   --agents-only          skip the price half (anyone can run this)
 //   --stale-only           push a price only when the market is going stale
-//                          (the fallback behind the CRE workflow, on CI)
+//                          (a pure fallback behind the CRE workflow)
+//   --minutes N            tick for N minutes, then exit (the always-on keeper
+//                          on GitHub Actions: one long run per job, relaunched
+//                          hourly); pushes on a 0.3% move or at 7 minutes old
 import { BN } from "@coral-xyz/anchor";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
@@ -21,6 +24,14 @@ const TICK_MS = Number(process.env.TICK_MS ?? 30_000);
 const REPUSH_AGE = 240; // seconds; the program's max_age is 600
 const MAX_STEP_BPS = 1400n;
 const STALE_ONLY = process.argv.includes("--stale-only");
+const MINUTES = (() => {
+  const i = process.argv.indexOf("--minutes");
+  return i > 0 ? Number(process.argv[i + 1]) : 0;
+})();
+// The always-on keeper pays every push from one devnet key: push less often,
+// still well inside the program's 10 minute max_age.
+const AGE = MINUTES ? 420 : REPUSH_AGE;
+const MOVE_BPS = MINUTES ? 30n : 10n;
 const STALE_AGE = 420; // seconds: the CRE workflow reprices every 4 min
 
 const conn = connection();
@@ -38,8 +49,8 @@ async function pushPrices() {
     const m = await accounts.market.fetch(market);
     const cur = BigInt(m.priceE8.toString());
     const age = now - Number(m.priceTime);
-    const moved = cur === 0n ? true : (q.priceE8 > cur ? q.priceE8 - cur : cur - q.priceE8) * 10_000n > cur * 10n;
-    if (STALE_ONLY ? age < STALE_AGE : !moved && age < REPUSH_AGE && m.sessionOpen === q.sessionOpen) continue;
+    const moved = cur === 0n ? true : (q.priceE8 > cur ? q.priceE8 - cur : cur - q.priceE8) * 10_000n > cur * MOVE_BPS;
+    if (STALE_ONLY ? age < STALE_AGE : !moved && age < AGE && m.sessionOpen === q.sessionOpen) continue;
     let target = q.priceE8;
     if (cur > 0n) {
       const cap = (cur * MAX_STEP_BPS) / 10_000n;
@@ -111,6 +122,16 @@ async function main() {
   log("keeper", keeper.publicKey.toBase58(), "balance", (await conn.getBalance(keeper.publicKey)) / 1e9, "SOL");
   await tick();
   if (process.argv.includes("--once")) return;
+  if (MINUTES) {
+    // Sequential ticks for a bounded run, then a clean exit.
+    const end = Date.now() + MINUTES * 60_000;
+    while (Date.now() + TICK_MS < end) {
+      await new Promise((r) => setTimeout(r, TICK_MS));
+      await tick();
+    }
+    log("keeper run done");
+    return;
+  }
   setInterval(tick, TICK_MS);
 }
 

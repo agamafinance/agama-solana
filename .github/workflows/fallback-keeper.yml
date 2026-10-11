@@ -1,21 +1,21 @@
-# The fallback behind the CRE workflows: every 5 minutes, push a price only for
-# a market about to go stale (the CRE workflow reprices each one every 4
-# minutes, so this does nothing while it runs) and run the permissionless
-# agents. Keeps the devnet demo alive if the machine running the CRE
-# simulator is offline. Needs the KEEPER_KEY secret (the devnet keeper keypair
-# as a JSON array).
-name: fallback-keeper
+# The always-on keeper for the devnet demo. Scheduled runs on GitHub are sparse,
+# so each job ticks for 5h40 (prices every 30 s when they move 0.3% or reach 7
+# minutes, then the permissionless agents on every position) and a new job is
+# queued every hour: one runs, the next waits its turn. Keeps the demo alive
+# without any machine of ours online. Needs the KEEPER_KEY secret (the devnet
+# keeper keypair as a JSON array).
+name: keeper
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
 concurrency:
-  group: fallback-keeper
+  group: keeper
   cancel-in-progress: false
 jobs:
   tick:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -30,6 +30,6 @@ jobs:
         env:
           KEEPER_KEY: ${{ secrets.KEEPER_KEY }}
         run: mkdir -p .keys && printf '%s' "$KEEPER_KEY" > .keys/keeper.json
-      - run: ./node_modules/.bin/tsx scripts/keeper.ts --once --stale-only
+      - run: ./node_modules/.bin/tsx scripts/keeper.ts --minutes 340
         env:
           SOLANA_RPC: https://rpc.magicblock.app/devnet
