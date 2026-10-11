@@ -66,14 +66,14 @@ export default function SolanaFaucetPage() {
 
           <h1 className="mt-3 text-[34px] md:text-[44px] leading-[1.05] text-fg font-semibold">Get devnet funds</h1>
           <p className="mt-4 max-w-[640px] text-[15px] text-fg-muted">
-            Grab devnet SOL for fees, then take the stand-in USDC, the nine xStocks and GLDY in one approval, straight
+            Grab devnet SOL for fees, then take the stand-in USDC, the nine xStocks and XAUt0 in one approval, straight
             into your private balance. Solana devnet carries none of them, so these are ours: Token-2022 mints with
-            confidential transfers, priced live by the Chainlink CRE workflow.
+            confidential transfers, priced live off Chainlink Data Streams.
           </p>
 
           <div className="mt-7 flex flex-wrap gap-8">
             <Stat label="Network" value="Solana Devnet" sub={`Program ${program.slice(0, 4)}...${program.slice(-4)}`} />
-            <Stat label="Asset" value="xStocks" sub="9 stocks and GLDY gold" />
+            <Stat label="Asset" value="xStocks" sub="9 stocks and XAUt0 gold" />
             <Stat
               label="USDC"
               value={usdc === undefined ? '-' : usd(usdc).replace('$', '')}
@@ -108,7 +108,7 @@ export default function SolanaFaucetPage() {
               </div>
             }
             title="USDC, the nine stocks and gold"
-            blurb="10,000 USDC, and 10 each of TSLAx, NVDAx, AAPLx, SPYx, QQQx, GOOGLx, MSFTx, AMZNx, METAx and GLDY, minted and shielded into your private balance. One approval."
+            blurb="10,000 USDC, and 10 each of TSLAx, NVDAx, AAPLx, SPYx, QQQx, GOOGLx, MSFTx, AMZNx, METAx and XAUt0, minted and shielded into your private balance. One approval."
           >
             <MintButton
               onClick={address ? claim : () => connect()}

@@ -1,5 +1,6 @@
 // The keeper: relays prices and runs the agents. Anyone can run the agent half;
-// only the price half needs the keeper key.
+// only the price half needs the keeper key. Prices come from Chainlink Data
+// Streams, checked against the tokens themselves (see fetchQuotes).
 //
 //   every tick (30 s)
 //     prices   push each market when it moved or is getting old; a move larger
@@ -11,7 +12,7 @@
 //   pnpm keeper --once     one tick, then exit
 //   --agents-only          skip the price half (anyone can run this)
 //   --stale-only           push a price only when the market is going stale
-//                          (a pure fallback behind the CRE workflow)
+//                          (a fallback behind another keeper)
 //   --minutes N            tick for N minutes, then exit (the always-on keeper
 //                          on GitHub Actions: one long run per job, relaunched
 //                          hourly); pushes on a 0.3% move or at 7 minutes old
@@ -32,7 +33,7 @@ const MINUTES = (() => {
 // still well inside the program's 10 minute max_age.
 const AGE = MINUTES ? 420 : REPUSH_AGE;
 const MOVE_BPS = MINUTES ? 30n : 10n;
-const STALE_AGE = 420; // seconds: the CRE workflow reprices every 4 min
+const STALE_AGE = 420; // seconds: the main keeper reprices at 7 min at the latest
 
 const conn = connection();
 const keeper = keeperKeypair();

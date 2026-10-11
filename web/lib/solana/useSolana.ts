@@ -12,7 +12,7 @@ import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID as TOKEN_PROGRAM_ID 
 
 import idlJson from './idl.json';
 import {
-  ata, BPS, crePda, lpMint, poolUsdc, positionPda, protocolPda, RPC, STOCKS, usdcMint, VALUE_SCALE, vaultUsdc, WAD, YEAR,
+  ata, BPS, lpMint, poolUsdc, positionPda, protocolPda, RPC, STOCKS, usdcMint, VALUE_SCALE, vaultUsdc, WAD, YEAR,
   type Kind, type Stock,
 } from './config';
 import { runBatch } from './batch';
@@ -99,8 +99,6 @@ export interface Position {
 export interface Snapshot {
   /** The wallet this snapshot was read for. */
   owner?: string;
-  /** The Chainlink CRE receiver, if configured. */
-  cre?: { simulation: boolean; reports: number; lastPriceAt: number };
   protocol: Protocol;
   markets: Market[];
   earn: (Position | undefined)[];
@@ -230,7 +228,7 @@ const tokenAmount = (data: Buffer | undefined) => (data && data.length >= 72 ? d
 const mintSupply = (data: Buffer | undefined) => (data && data.length >= 44 ? data.readBigUInt64LE(36) : 0n);
 
 /// Everything every page needs, in one `getMultipleAccounts`: the protocol,
-/// the markets, the LP mint, the CRE receiver, and when a wallet is connected
+/// the markets, the LP mint, and when a wallet is connected
 /// its possible positions and token balances. One round trip per refresh.
 export async function readSnapshot(owner?: PublicKey): Promise<Snapshot> {
   const keys: PublicKey[] = [protocolPda, lpMint, ...STOCKS.map((s) => s.market)];
@@ -238,7 +236,6 @@ export async function readSnapshot(owner?: PublicKey): Promise<Snapshot> {
     keys.push(ata(owner, usdcMint), ata(owner, lpMint), ...STOCKS.map((s) => ata(owner, s.stockMint)));
     for (const s of STOCKS) keys.push(positionPda(owner, s.market, 'earn'), positionPda(owner, s.market, 'amplify'));
   }
-  keys.push(crePda);
   const [infos, sol] = await Promise.all([
     connection.getMultipleAccountsInfo(keys),
     owner ? connection.getBalance(owner) : Promise.resolve(0),
@@ -264,23 +261,9 @@ export async function readSnapshot(owner?: PublicKey): Promise<Snapshot> {
       amplify.push(a ? decodePosition(keys[base + 2 * i + 1], STOCKS[i], a.data, protocol, markets[j]) : undefined);
     });
   }
-  // The CRE receiver's config, decoded with the IDL rather than byte offsets:
-  // its layout moves with the program. Absent or undecodable, no badge.
-  let cre: Snapshot['cre'];
-  const creInfo = infos[keys.length - 1];
-  if (creInfo) {
-    try {
-      const c = decode('CreConfig', creInfo.data);
-      const lastPriceAt = Number(c.lastPriceAt ?? c.lastReportAt ?? 0);
-      cre = { simulation: !!c.simulation, reports: Number(c.reports ?? 0), lastPriceAt };
-    } catch {
-      cre = undefined;
-    }
-  }
   return {
     protocol,
     markets,
-    cre,
     earn,
     amplify,
     usdc: owner ? tokenAmount(infos[o]?.data) : 0n,

@@ -18,7 +18,6 @@ use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_2022::Token2022;
 use anchor_spl::token_interface::{self as token, Mint, TokenAccount, TransferChecked};
-use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 
 pub mod errors;
 pub mod math;
@@ -234,169 +233,6 @@ pub mod agama_solana {
             price_e8,
             publish_time,
             session_open
-        });
-        Ok(())
-    }
-
-    // =====================================================================
-    //                          CHAINLINK CRE
-    // =====================================================================
-
-    /// Point the receiver at a forwarder deployment and, optionally, pin the
-    /// workflow owner.
-    pub fn set_cre(ctx: Context<SetCre>, params: CreParams) -> Result<()> {
-        if params.simulation {
-            // The mock forwarder authenticates nobody: the transmitter is what
-            // stands between the receiver and anyone with the CLI.
-            require!(
-                params.transmitter != Pubkey::default(),
-                AgamaError::BadParams
-            );
-        } else {
-            // The Keystone Forwarder proves the DON signed, not whose workflow
-            // it was: owner and name are what tie reports to this one.
-            require!(
-                params.workflow_owner != [0u8; 20] && params.workflow_name != [0u8; 10],
-                AgamaError::BadParams
-            );
-        }
-        let c = &mut ctx.accounts.cre;
-        c.forwarder_program = params.forwarder_program;
-        c.forwarder_state = params.forwarder_state;
-        c.workflow_owner = params.workflow_owner;
-        c.workflow_name = params.workflow_name;
-        c.simulation = params.simulation;
-        c.transmitter = params.transmitter;
-        c.bump = ctx.bumps.cre;
-        Ok(())
-    }
-
-    /// The Chainlink CRE receiver. The forwarder calls this after verifying
-    /// the DON's signatures (the mock forwarder after nothing: then the
-    /// transmitter is checked instead). The markets to price follow `cre` and
-    /// the instructions sysvar in the accounts. Same bounds as the keeper.
-    pub fn on_report<'info>(
-        ctx: Context<'info, OnReport<'info>>,
-        metadata: Vec<u8>,
-        report: Vec<u8>,
-    ) -> Result<()> {
-        let now = Clock::get()?.unix_timestamp;
-        let cre = &mut ctx.accounts.cre;
-        let state = &ctx.accounts.state;
-        require_keys_eq!(
-            state.key(),
-            cre.forwarder_state,
-            AgamaError::InvalidForwarder
-        );
-        require_keys_eq!(
-            *state.owner,
-            cre.forwarder_program,
-            AgamaError::InvalidForwarder
-        );
-        let (authority, _) = Pubkey::find_program_address(
-            &[b"forwarder", state.key().as_ref(), crate::ID.as_ref()],
-            &cre.forwarder_program,
-        );
-        require_keys_eq!(
-            ctx.accounts.forwarder_authority.key(),
-            authority,
-            AgamaError::InvalidForwarderAuthority
-        );
-        // metadata = workflow_cid (32) | workflow_name (10) | workflow_owner (20) | report_id (2)
-        require!(metadata.len() >= 62, AgamaError::InvalidReport);
-        let mut owner = [0u8; 20];
-        owner.copy_from_slice(&metadata[42..62]);
-        if cre.workflow_owner != [0u8; 20] {
-            require!(
-                owner == cre.workflow_owner,
-                AgamaError::InvalidWorkflowOwner
-            );
-        }
-        if cre.workflow_name != [0u8; 10] {
-            require!(
-                metadata[32..42] == cre.workflow_name,
-                AgamaError::InvalidWorkflowOwner
-            );
-        }
-        if cre.simulation {
-            // The top-level instruction is the forwarder's `report`; its second
-            // account is the transmitter that signed the transaction.
-            let ixs = &ctx.accounts.instructions;
-            let idx = load_current_index_checked(ixs)?;
-            let top = load_instruction_at_checked(idx as usize, ixs)?;
-            require_keys_eq!(
-                top.program_id,
-                cre.forwarder_program,
-                AgamaError::InvalidForwarder
-            );
-            let transmitter = top.accounts.get(1).ok_or(AgamaError::InvalidForwarder)?;
-            require!(
-                transmitter.is_signer && transmitter.pubkey == cre.transmitter,
-                AgamaError::InvalidTransmitter
-            );
-        }
-        let parsed =
-            PriceReport::try_from_slice(&report).map_err(|_| error!(AgamaError::InvalidReport))?;
-
-        let mut applied = 0u32;
-        for u in &parsed.updates {
-            let found = ctx.remaining_accounts.iter().find(|ai| {
-                ai.owner == &crate::ID
-                    && ai.is_writable
-                    && Account::<Market>::try_from(*ai)
-                        .map(|m| m.symbol == u.symbol)
-                        .unwrap_or(false)
-            });
-            // A market the report names but did not pass is skipped like a bad
-            // price: it must not take the rest of the report down.
-            let Some(ai) = found else {
-                emit!(PriceSkipped {
-                    market: Pubkey::default(),
-                    price_e8: u.price_e8,
-                    publish_time: u.publish_time,
-                    current_price_e8: 0,
-                    current_publish_time: 0,
-                });
-                continue;
-            };
-            let mut m: Account<Market> = Account::try_from(ai)?;
-            let expected = Pubkey::create_program_address(
-                &[MARKET_SEED, m.stock_mint.as_ref(), &[m.bump]],
-                &crate::ID,
-            )
-            .map_err(|_| error!(AgamaError::MarketNotInReport))?;
-            require_keys_eq!(ai.key(), expected, AgamaError::MarketNotInReport);
-            // Older than the price already there, or a repeat of the same
-            // publish time: skipped and said so.
-            match m.apply_price(u.price_e8, u.publish_time, u.session_open, now) {
-                Ok(price) => {
-                    m.exit(&crate::ID)?;
-                    applied += 1;
-                    emit!(PricePushed {
-                        market: ai.key(),
-                        price_e8: price,
-                        publish_time: u.publish_time,
-                        session_open: u.session_open
-                    });
-                }
-                Err(_) => emit!(PriceSkipped {
-                    market: ai.key(),
-                    price_e8: u.price_e8,
-                    publish_time: u.publish_time,
-                    current_price_e8: m.price_e8,
-                    current_publish_time: m.price_time,
-                }),
-            }
-        }
-        cre.reports += 1;
-        cre.last_report_at = now;
-        if applied > 0 {
-            cre.last_price_at = now;
-        }
-        emit!(CreReportReceived {
-            workflow_owner: owner,
-            simulation: cre.simulation,
-            report: parsed,
         });
         Ok(())
     }
@@ -959,16 +795,6 @@ impl ProtocolParams {
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-pub struct CreParams {
-    pub forwarder_program: Pubkey,
-    pub forwarder_state: Pubkey,
-    pub workflow_owner: [u8; 20],
-    pub workflow_name: [u8; 10],
-    pub simulation: bool,
-    pub transmitter: Pubkey,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct MarketParams {
     pub ltv_bps: u16,
     pub lt_bps: u16,
@@ -1078,32 +904,6 @@ pub struct PushPrice<'info> {
     pub protocol: Box<Account<'info, Protocol>>,
     #[account(mut, seeds = [MARKET_SEED, market.stock_mint.as_ref()], bump = market.bump)]
     pub market: Box<Account<'info, Market>>,
-}
-
-#[derive(Accounts)]
-pub struct SetCre<'info> {
-    #[account(mut)]
-    pub admin: Signer<'info>,
-    #[account(seeds = [PROTOCOL_SEED], bump = protocol.bump, has_one = admin @ AgamaError::NotAdmin)]
-    pub protocol: Box<Account<'info, Protocol>>,
-    #[account(init_if_needed, payer = admin, space = 8 + CreConfig::INIT_SPACE, seeds = [CRE_SEED], bump)]
-    pub cre: Box<Account<'info, CreConfig>>,
-    pub system_program: Program<'info, System>,
-}
-
-/// The forwarder supplies `state` and `forwarder_authority`; `cre` and the
-/// markets are the receiver accounts the workflow lists after them.
-#[derive(Accounts)]
-pub struct OnReport<'info> {
-    /// CHECK: matched against `cre.forwarder_state` and its owner in the handler.
-    pub state: UncheckedAccount<'info>,
-    pub forwarder_authority: Signer<'info>,
-    #[account(mut, seeds = [CRE_SEED], bump = cre.bump)]
-    pub cre: Box<Account<'info, CreConfig>>,
-    /// CHECK: the instructions sysvar, pinned by address; read in simulation
-    /// to check who transmitted the report.
-    #[account(address = solana_instructions_sysvar::ID)]
-    pub instructions: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1416,22 +1216,6 @@ pub struct PricePushed {
 pub struct BadDebtWrittenOff {
     pub position: Pubkey,
     pub amount: u64,
-}
-
-#[event]
-pub struct PriceSkipped {
-    pub market: Pubkey,
-    pub price_e8: u64,
-    pub publish_time: i64,
-    pub current_price_e8: u64,
-    pub current_publish_time: i64,
-}
-
-#[event]
-pub struct CreReportReceived {
-    pub workflow_owner: [u8; 20],
-    pub simulation: bool,
-    pub report: PriceReport,
 }
 
 #[event]

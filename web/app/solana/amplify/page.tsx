@@ -10,7 +10,7 @@ import {
   ago, borrowRateBps, ix, pct, px, qty, stockFor, stockValue, usd, useSnapshot,
 } from '@/lib/solana/useSolana';
 import {
-  AgentsCard, AmountBox, card, Hero, CreBadge, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
+  AgentsCard, AmountBox, card, Hero, MarketCards, Panel, parseAmount, PriceBadge, primaryBtn, Row, secondaryBtn, SessionBadge,
   Stat, Step, toDecimal,
 } from '@/components/solana/ui';
 
@@ -115,7 +115,7 @@ export default function SolanaAmplifyPage() {
           <p className="text-[12px] text-[#b4571f]">Showing data from {ago(snap.at)}: the RPC is not answering, retrying.</p>
         )}
         {snap && <MarketCards markets={snap.markets} sel={sel} onSelect={setSel} connected={!!address} />}
-        {snap && <CreBadge cre={snap.cre} />}
+        {snap && <PriceBadge markets={snap.markets} />}
 
         <div className="grid gap-5 lg:grid-cols-[1fr_1fr] items-start">
           <div className={card}>
@@ -225,7 +225,7 @@ export default function SolanaAmplifyPage() {
                   }
                 >
                   The price rises, the agents borrow and buy more stock; it falls, they sell just enough to repay. The
-                  multiple stays where you set it. A Chainlink CRE workflow makes the calls every minute, and anyone else can too.
+                  multiple stays where you set it. A keeper makes the calls every minute, and anyone else can too.
                 </AgentsCard>
                 <p className="mt-3 text-[12px] text-fg-muted">
                   Closing hands what is left of the stock back to your private balance: one approval for the close,

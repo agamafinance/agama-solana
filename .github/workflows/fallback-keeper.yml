@@ -5,7 +5,9 @@
 # does not depend on the cron, which GitHub fires late (hours) and disables
 # after 60 days without activity; the hourly cron only restarts a broken chain. Keeps the demo alive
 # without any machine of ours online. Needs the KEEPER_KEY secret (the devnet
-# keeper keypair as a JSON array).
+# keeper keypair as a JSON array) and the Chainlink Data Streams credentials
+# (DATASTREAMS_API_KEY, DATASTREAMS_API_SECRET); without them the markets are
+# priced off the tokens alone.
 name: keeper
 on:
   schedule:
@@ -41,5 +43,7 @@ jobs:
         run: mkdir -p .keys && printf '%s' "$KEEPER_KEY" > .keys/keeper.json
       - run: ./node_modules/.bin/tsx scripts/keeper.ts --minutes 340
         env:
+          DATASTREAMS_API_KEY: ${{ secrets.DATASTREAMS_API_KEY }}
+          DATASTREAMS_API_SECRET: ${{ secrets.DATASTREAMS_API_SECRET }}
           # In order of preference; each call fails over to the next one.
           SOLANA_RPCS: ${{ secrets.HELIUS_RPC }},https://rpc.magicblock.app/devnet,https://api.devnet.solana.com

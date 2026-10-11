@@ -14,9 +14,6 @@ pub const STOCK_SEED: &[u8] = b"stock.v2";
 pub const MARKET_SEED: &[u8] = b"market.v2";
 pub const CUSTODY_SEED: &[u8] = b"custody.v2";
 pub const POSITION_SEED: &[u8] = b"position.v2";
-/// `.v3`: CreConfig gained the workflow name, the trusted transmitter and
-/// `last_price_at`; the v2 account is left where it is.
-pub const CRE_SEED: &[u8] = b"cre.v3";
 pub const EARN_SEED: &[u8] = b"earn";
 pub const AMPLIFY_SEED: &[u8] = b"amplify";
 
@@ -246,52 +243,8 @@ impl Position {
     }
 }
 
-/// Where Chainlink CRE reports may come from. The Keystone Forwarder verifies
-/// the DON's signatures, then CPIs `on_report` signed by a PDA of
-/// `["forwarder", forwarder_state, this program]`; the receiver checks that PDA
-/// and the workflow owner in the metadata.
-#[account]
-#[derive(InitSpace)]
-pub struct CreConfig {
-    pub forwarder_program: Pubkey,
-    pub forwarder_state: Pubkey,
-    /// EVM-style address of the workflow owner, as CRE puts it in the
-    /// metadata. Required outside simulation: the Keystone Forwarder proves
-    /// the DON signed a report, not which customer's workflow produced it.
-    pub workflow_owner: [u8; 20],
-    /// The workflow name as CRE puts it in the metadata (10 bytes). Pinned
-    /// with the owner outside simulation.
-    pub workflow_name: [u8; 10],
-    /// True while the forwarder is the CLI's mock, which relays anything
-    /// without checking signatures. Reports are then accepted only when the
-    /// transaction's transmitter (the key running the simulator) is this one.
-    pub simulation: bool,
-    pub transmitter: Pubkey,
-    pub bump: u8,
-    pub reports: u64,
-    pub last_report_at: i64,
-    /// Last time a report actually moved a price: the liveness the app shows.
-    pub last_price_at: i64,
-}
-
-/// One price in a CRE report.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, InitSpace)]
-pub struct PriceUpdate {
-    pub symbol: [u8; 8],
-    pub price_e8: u64,
-    pub publish_time: i64,
-    pub session_open: bool,
-}
-
-/// The Borsh payload a CRE workflow writes: a few markets per report, since a
-/// Solana transaction leaves the forwarder ~265 bytes once accounts are paid.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
-pub struct PriceReport {
-    pub updates: Vec<PriceUpdate>,
-}
-
 impl Market {
-    /// The one place a price is written, whoever brings it (keeper or CRE):
+    /// The one place a price is written:
     /// positive, publish time forward and not from the future, and at most
     /// `max_jump_bps` away from the last one.
     pub fn apply_price(

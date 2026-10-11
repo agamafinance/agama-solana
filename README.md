@@ -3,7 +3,7 @@
 Deposit a tokenized stock, get more of it back. Live on **Solana devnet**.
 
 The xStocks (TSLAx, NVDAx, AAPLx, SPYx, QQQx, GOOGLx, MSFTx, AMZNx, METAx) and
-Streamex's gold-backed GLDY are native tokens on Solana and trade around the
+Tether Gold (XAUt0) are native tokens on Solana and trade around the
 clock, yet a holder can only hold them. Agama turns
 them into a position that grows: deposit the stock, the protocol borrows USDC
 against it, puts the USDC to work in the Agama private credit vault, and
@@ -20,7 +20,7 @@ grows is your share count, not a stablecoin balance.
 
 **Try it without help.** Open the app with Phantom, Backpack or Solflare set to
 devnet (a little devnet SOL from faucet.solana.com pays the fees), hit **Faucet** (USDC, the nine
-stocks and GLDY land straight into your private balance), then **Earn**: pick a
+stocks and XAUt0 land straight into your private balance), then **Earn**: pick a
 stock, an amount and a level, deposit. Your position appears with its borrow,
 its vault share and the agents keeping it on target; **Amplify** loops a stock
 to a multiple; **Portfolio** decrypts your private balances on demand.
@@ -42,14 +42,15 @@ to a multiple; **Portfolio** decrypts your private balances on demand.
 - **Agents need cheap, fast blocks.** `rebalance`, `compound` and `liquidate`
   are permissionless; at Solana fees and finality, keeping every position on
   target minute by minute is viable for anyone.
-- **Tested like a program, not a demo.** 16 LiteSVM flows, end to end runs on a
+- **Tested like a program, not a demo.** 14 LiteSVM flows, end to end runs on a
   local validator and on devnet, and a browser end to end on the live app.
 
-**What was built, and when.** Every line
-of this repository (the Anchor program, the Token-2022 confidential balance
-flows, both CRE workflows, the Data Streams integration, the web app and the
-tests) was written on 6 and 7 October 2026, at TOKEN2049 Origins, where it placed
-second on the Solana track. The first
+**What was built, and when.** The core of this repository (the Anchor program,
+the Token-2022 confidential balance flows, the Data Streams integration, the web
+app and the tests) was written on 6 and 7 October 2026, at TOKEN2049 Origins,
+where it placed second on the Solana track. Since then: the always-on keeper and
+its monitoring, and the price layer simplified to Data Streams read directly by
+the keeper (the git history has every step). The first
 commit lands the program and its tests in one piece (they were iterated
 locally before the repository was created); the program's first transaction on
 devnet is from 6 October, 05:00 UTC. The product design is not new: it is the one Agama shipped on
@@ -70,18 +71,18 @@ flowchart TB
 
     subgraph program["AGAMA PROGRAM (one Anchor program)"]
         POS["Position PDA<br/>one per owner, market and product<br/>the borrower of record"]
-        MKT["Market PDA x10<br/>9 xStocks + GLDY<br/>LTV, threshold, off-hours buffer, price"]
+        MKT["Market PDA x10<br/>9 xStocks + XAUt0<br/>LTV, threshold, off-hours buffer, price"]
         POOL["Lending pool<br/>USDC, kinked rate, LP token"]
         VAULT["Agama private credit vault<br/>NAV per share, the Earn buffer"]
         PROTO["Protocol PDA<br/>signs for the pool, the vault,<br/>every custody and mint"]
     end
 
-    subgraph price["THE PRICE LAYER: CHAINLINK CRE"]
-        CRE["agama-prices, Confidential Workflow<br/>Data Streams read in a TEE<br/>checked against Jupiter + DEX by DON consensus"]
-        KEEPER["Keeper script<br/>fallback, keeper key"]
+    subgraph price["THE PRICE LAYER: CHAINLINK DATA STREAMS"]
+        DS["Chainlink Data Streams<br/>9 shares by session + XAU/USD"]
+        KEEPER["Keeper, always on<br/>checks each price against<br/>the token on Jupiter + DEX"]
     end
 
-    AGENTS["Agents<br/>agama-agents CRE workflow (TEE signs)<br/>or anyone: permissionless"]
+    AGENTS["Agents<br/>the keeper, or anyone: permissionless"]
     LENDERS["USDC lenders"]
 
     USER --> app
@@ -92,8 +93,8 @@ flowchart TB
     POOL -->|"borrow USDC"| POS
     POS -->|"borrowed USDC"| VAULT
     AGENTS -->|"rebalance / compound / liquidate"| POS
-    CRE -->|"signed report via the forwarder"| MKT
-    KEEPER -.->|"bounded pushes"| MKT
+    DS --> KEEPER
+    KEEPER -->|"push_price, bounded"| MKT
     PROTO -.-> POOL
     PROTO -.-> VAULT
 
@@ -106,7 +107,7 @@ flowchart TB
     class USER,LENDERS actor
     class EARN,AMP product
     class POS,MKT,POOL,VAULT,PROTO core
-    class CRE,KEEPER oracle
+    class DS,KEEPER oracle
     class AGENTS bot
 ```
 
@@ -128,9 +129,10 @@ flowchart TB
   the position's vault shares; only if that does not restore health does the
   liquidator repay half the debt and take stock at a 5% bonus.
 - **Priced around the clock, honestly.** Chainlink Data Streams, the xStocks'
-  own data provider, price every market (see below). In NYSE session it takes the share price;
-  outside it, the xStock token's own price on Solana, flagged off-hours so LTV
-  and threshold both tighten by 5 points. A price moves 15% at most per
+  own data provider, price every market in its live session (regular, extended
+  or overnight; see below). On weekends the price is the xStock token's own on
+  Solana. Outside regular hours a market is flagged off-hours, so LTV and
+  threshold both tighten by 5 points. A price moves 15% at most per
   update, publish times only move forward, and only a stale price stops a
   borrow.
 - **No buttons for the automation.** Every position records which agent last
@@ -149,7 +151,7 @@ oracle, so an agent has nothing to choose and nothing to skim.
 
 ## Confidential balances
 
-Every token Agama mints (USDC, the nine xStocks, GLDY, the LP token) is a Token-2022
+Every token Agama mints (USDC, the nine xStocks, XAUt0, the LP token) is a Token-2022
 mint with the **confidential transfer extension**. A holder can move any of
 them into an encrypted balance and send them to anyone without the amount ever
 appearing on chain: balances and transfer amounts are ElGamal ciphertexts, and
@@ -189,163 +191,54 @@ add one later.
 into Earn, close and shield back, lend from private, every balance decrypted
 and checked exactly.
 
-## Prices and agents: Chainlink Data Streams through CRE
+## Prices and agents: Chainlink Data Streams
 
-Two Chainlink Runtime Environment workflows run the protocol. `agama-prices`
-prices the markets; `agama-agents` runs the agents. The keeper script stays
-as a fallback: anyone can run its agent half (the instructions are
-permissionless), its price half needs the keeper key.
-
-**Both are Confidential Workflows.** Each handler runs in a TEE
-(`handlerInTee`, AWS Nitro) and holds the one credential that must not leak:
-the Chainlink Data Streams API key and secret for `agama-prices` (a
-proprietary data credential: the HMAC signature is computed in the enclave),
-the agent's signing key for `agama-agents`. Only decoded prices and signed
-transactions leave the enclave. What should be public and agreed is asked of
-the DONs through `usingTheDons()` (where each request physically runs is the
-CRE TEE host's business, not this code's): the public price sources and the
-chain reads under median or identical consensus, the report signature, the
-Solana write. No node operator ever holds either secret. The decision itself
-runs in the enclave, and a Data Streams price is used only when it agrees with
-what the DON read (the xStock token within 3%, gold spot within 3%).
-
-Why a TEE handler and not just `confidential-http`: the SDK's confidential
-HTTP capability templates Vault secrets into a request, but Data Streams wants
-an HMAC computed over each request with the secret, which only code running
-next to the secret can do.
-
-### agama-prices
+One keeper (`scripts/keeper.ts`) prices the markets and runs the agents. It
+runs on GitHub Actions around the clock (`.github/workflows/fallback-keeper.yml`):
+each job ticks every 30 seconds for almost six hours and queues the next one
+before it starts.
 
 ```
-cron, every minute (the three markets with the oldest price on chain)
-  in the TEE (handlerInTee, AWS Nitro), with the API secret:
-    Chainlink Data      the 9 shares' regular, extended and overnight streams
-      Streams           (RWA Advanced v11), one HMAC-signed bulk request; the
-                        marketStatus field picks the live session; XAU/USDT x
-                        USDT/USD for gold
-  each DON node, over HTTP (usingTheDons):
-    Jupiter price API   the 9 xStocks: the token's own price and the share's
-    DexScreener         the deepest USDC pair of each xStock: a second,
-                        independent token price (Raydium, Meteora...)
-    Solana mainnet RPC  Orca's GLDY/USDC whirlpool account, sqrt_price at offset 65
-    gold spot           a guard on that thin pool (3% band)
-  consensus             median of every public field across the nodes
-  decision, DON clock   in session or not (NYSE hours, gold 24/5), which source
-  Solana write          one signed report, this minute's group of 3 markets
-    -> Keystone Forwarder -> agama.on_report -> markets priced
+every tick (30 s)
+  Chainlink Data Streams  the 9 shares' regular, extended and overnight streams
+                          (RWA Advanced v11), one HMAC-signed bulk request; the
+                          marketStatus field picks the live session; XAU/USDT x
+                          USDT/USD for gold (v3)
+  Jupiter price API       each xStock and XAUt0: the token's own price, and the
+                          share's last print
+  DexScreener             the deepest pair of each token: a second, independent
+                          token price (Raydium, Meteora...)
+  gold spot               a guard on the gold reference
+  push_price              every market that moved 0.3% or is 7 minutes old
+  agents                  simulate rebalance and compound on every position,
+                          send the ones that would do something
 ```
 
-- **No single source decides.** An xStock's token price needs Jupiter and the
-  DEX pair to agree within 2% (then their mean), or comes from the one that
-  answered; if they disagree, the market is skipped this run and keeps its
-  last price. In session the share price leads only while it is within 3% of
-  that token price. GLDY needs the Orca pool within 3% of the gold reference,
-  Chainlink Data Streams XAU/USDT x USDT/USD (gold spot when the streams are
-  unavailable), or falls back to that reference.
+- **No single source decides.** A token price needs Jupiter and the DEX pair
+  to agree within 2% (then their mean), or comes from the one that answered;
+  if they disagree, the market keeps its last price.
 - **Chainlink Data Streams lead.** Whenever a session is live (regular, pre,
   post or overnight, as the report's `marketStatus` says, never inferred from
-  timestamps), the share price comes from Chainlink Data Streams, stamped
-  with the report's observation time, provided the token's own price (Jupiter
-  and the DEX pair) agrees within 3%. Regular hours get the session terms, the
-  extended sessions the off-hours ones. Weekends, when the streams are closed,
-  fall back to the token. Testnet credentials from Chainlink live in
-  `.keys/datastreams.env` and reach the enclave as CRE secrets; deployed, they
-  sit in the Vault DON and are released to the TEE only. `scripts/datastreams-check.ts` fetches and
-  decodes the 27 reports on its own.
+  timestamps), the share price comes from Chainlink Data Streams, stamped with
+  the report's observation time, provided the token agrees within 3%. Regular
+  hours get the session terms, the extended sessions the off-hours ones.
+  Weekends, when the streams are closed, fall back to the token. Gold is Data
+  Streams XAU/USDT x USDT/USD when gold spot and XAUt0 agree with it within 3%.
+  `scripts/datastreams-check.ts` prints the 29 reports on its own.
+- **Bounded on chain.** `push_price` takes the keeper key. A publish time must
+  be strictly newer than the last one and at most 15 s ahead. A move larger
+  than 15% is not refused, which would freeze the market for good after an
+  earnings gap: the price steps 15% toward it per update and converges.
+- **Prices carry their source's time.** A Data Streams price is stamped with
+  its observation, a share print with its own time; only a token price is
+  stamped with the keeper's clock.
+- **The agents are anyone.** `rebalance`, `compound` and `liquidate` take any
+  signer; the keeper is one caller among many, and `pnpm keeper --agents-only`
+  runs that half without any key.
 - **Next: verify the reports on chain.** The program could take the signed
-  report and CPI Chainlink's Data Streams Verifier on Solana, so the price is
-  checked by the Data Streams DON's signatures rather than trusted from the
-  workflow. That needs our account on the Verifier's access controller.
-- **The receiver checks who is calling.** `on_report` requires the configured
-  forwarder state and the forwarder's authority PDA for this program as signer.
-  On the live Keystone Forwarder that proves the DON signed, not whose
-  workflow it was, so production mode (`set_cre`) refuses to start without the
-  workflow owner and name, both checked against the metadata. The CLI's mock
-  forwarder relays anything without signatures, so in simulation mode the
-  receiver reads the instructions sysvar and only accepts a report whose
-  transaction was signed by the trusted transmitter (the key running the
-  simulator). Then it decodes the Borsh `PriceReport` and prices the markets
-  listed after `cre` and the sysvar, with the same `apply_price` the keeper
-  uses.
-- **Bounded steps.** A publish time must be strictly newer than the last one
-  and at most 15 s ahead. A move larger than 15% is not refused, which would
-  freeze the market for good after an earnings gap: the price steps 15% toward
-  it per update and converges. The bound is per update, not per unit of time:
-  whoever holds a price key can stack updates with rising publish times (see
-  Known limitations).
-- **One bad price does not sink the report.** A price older than the one
-  already there, or a market the report names without passing it, is skipped
-  with a `PriceSkipped` event; the other markets of the report still update.
-- **Prices carry their source's time.** A share price is stamped with its last
-  print, gold spot with its own time; only the 24/7 token price is stamped
-  with the DON's clock. A source counts only when a majority of nodes read it,
-  so a node's failed read (a 0) cannot drag a median.
-- **Three markets per report.** A CRE Solana write leaves the receiver 265
-  bytes, less 32 per account it lists (cre, the sysvar, each market); a price
-  update is 25 bytes. The workflow refuses a `marketsPerReport` that would not
-  fit.
-- **One report per run, the groups taking turns.** Through the simulator on
-  the public devnet RPC, a second write in the same run hit the RPC's
-  connection limit while the first one's confirmation was still being polled.
-  So each run writes one group of three, chosen by the minute (the same on
-  every node): each market is refreshed every four minutes, inside the ten the
-  program allows. `cre.last_price_at` only moves when a price applies, and is
-  the liveness the app shows.
-- **Where it runs today.** The organisation is still gated for CRE deploys, so
-  the workflow runs through the CRE simulator (`cre/run-devnet.sh`, every
-  minute under launchd), which executes the same WASM, does the same HTTP and
-  consensus steps, and broadcasts through Chainlink's **mock** forwarder on
-  devnet. The mock does not verify DON signatures, so the receiver trusts the
-  transmitter instead (see above), and the simulator puts a placeholder owner
-  (`0xaaaa...`) in the metadata, so owner pinning only means something on the
-  DON. Chainlink's answer for hackathons is exactly this path; deploying
-  to testnet or mainnet is a commercial agreement. With Deploy Access:
-  `cre workflow deploy agama-prices --target production-settings`, then
-  `CRE_MODE=production CRE_WORKFLOW_OWNER=0x... CRE_WORKFLOW_NAME=... pnpm setup`.
-- **Tested against Chainlink's own forwarder.** The LiteSVM suite loads the mock
-  forwarder program (dumped from devnet by `scripts/fetch-fixtures.sh`) and
-  sends real reports through it: prices applied, a 20% jump stepped to 15%
-  while the rest of the report lands, a stale report and a repeated symbol
-  skipped, another workflow owner, an untrusted transmitter and a forged
-  `forwarder_authority` refused, production mode refused without owner and
-  name.
-  `cre/simulate-local.sh` runs the whole workflow against a local validator
-  with the forwarder cloned in.
-
-### agama-agents
-
-```
-cron, every minute (at :30), a Confidential Workflow
-  each DON node, over HTTP (finalized state, so every node reads the same):
-    getMultipleAccounts  the protocol and the ten markets
-    getProgramAccounts   every Agama position
-    plan                 which positions need compound or rebalance, with the
-                         program's own math
-  identical consensus    the nodes must return the same plan, or nothing is sent
-  in the TEE             one recent blockhash, then sign the plan with the
-                         agent key (a CRE secret that never reaches a node)
-  each DON node          sends the identical bytes; Solana keeps one; the RPC
-                         preflight refuses AlreadyOnTarget / NothingToCompound
-```
-
-- **Why not a report through the forwarder.** An agent action needs ten
-  accounts; a CRE Solana write has no address lookup tables yet and leaves
-  about 265 bytes once accounts are paid. The instructions are permissionless,
-  so the workflow simply is one of the signers anyone could be.
-- **Under the DON** every node sends the same signed bytes: Solana lands one
-  and drops the duplicates.
-- The agent key only pays fees; positions record it as `last_agent`, which
-  the app shows. Checked end to end in `cre/simulate-local.sh`: a position at
-  20%, TSLA up 10%, one workflow run, the CRE agent key borrowed the difference.
-
-The old keeper (`scripts/keeper.ts`) stays as a fallback: its agent calls are
-permissionless, its `push_price` needs the keeper key and is bounded the same
-way as a CRE report.
-
-### CRE evidence
-
-Terminal output of both workflows, with the devnet transactions they wrote:
-[docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md).
+  Data Streams report and CPI Chainlink's Verifier on Solana, so a price is
+  checked against the Data Streams DON's signatures instead of trusted from
+  the keeper key.
 
 ## Where it lives
 
@@ -359,10 +252,9 @@ Terminal output of both workflows, with the devnet transactions they wrote:
 
 ## Devnet, said plainly
 
-- **Stand-in tokens.** USDC, the nine xStocks and GLDY are mints the program
-  controls, with a public faucet: no xStock or GLDY faucet exists on devnet, and
-  the real GLDY is permissioned (frozen-by-default accounts behind Streamex's
-  KYC allowlist). The prices are real: they track the live tokens.
+- **Stand-in tokens.** USDC, the nine xStocks and XAUt0 are mints the program
+  controls, with a public faucet: no xStock or XAUt0 faucet exists on devnet.
+  The prices are real: Data Streams, checked against the live tokens.
 - **Built to stay up for anyone testing it.** On devnet every market's
   `max_age` is 7 days (mainnet: minutes): the always-on keeper reprices every
   few minutes, and if it ever stops, prices freeze instead of the app refusing
@@ -374,22 +266,12 @@ Terminal output of both workflows, with the devnet transactions they wrote:
 - **The vault's coupons are minted.** There is no credit book on devnet, so when
   the vault pays out more than it took in, the difference is minted and counted
   in `coupons_paid`. It is the only place the program creates dollars.
-- **The session flag comes from the workflow's clock**, the price is bounded.
+- **The session flag comes from Data Streams' `marketStatus`** (or the keeper's clock for gold and on weekends); the price is bounded.
 - **Token-2022 throughout**, like the mainnet xStocks.
-- **RPC failover.** Public devnet RPCs rate limit (429). The CRE CLI takes one
-  RPC per chain, so the simulation target points at `scripts/rpc-proxy.mjs`, a
-  local proxy that moves a limited or failing request on to the next free
-  endpoint (MagicBlock's, Solana's own and Triton's, all three gateways to the
-  same Solana devnet) and benches the one that
-  limited us; keyed free tiers (Helius, Alchemy) can be added in
-  `.keys/rpc.env`. The agents workflow fails over across its own `rpcUrls`
-  inside the 15 HTTP calls an execution allows, and the GLDY read across
-  `mainnetRpcs`. The web app relays across the same three (`web/lib/solana/rpc.ts`),
-  Solana's own first.
-- Chainlink Data Streams lead the share prices; Jupiter's price API (token
-  price and the share's last print) and the deepest DEX pair are the
-  cross-check. Orca's API answers 403 to the CRE HTTP client, so GLDY is read
-  from the whirlpool account itself.
+- **RPC failover.** Public devnet RPCs rate limit (429). The keeper fails over
+  across `SOLANA_RPCS` (a keyed Helius endpoint, then MagicBlock's and Solana's
+  own) and benches one that limited it for 30 s; the web app relays across
+  three public endpoints (`web/lib/solana/rpc.ts`).
 
 ## Known limitations
 
@@ -397,8 +279,7 @@ Said plainly, for the judges and for the audit that comes after.
 
 - **The price bound is per update, not per unit of time.** `apply_price`
   moves a price at most 15% per update, and an update only needs a newer
-  publish time (at most 15 s ahead). Whoever holds a price key (the keeper key,
-  or the simulation transmitter) can stack updates with rising publish times in
+  publish time (at most 15 s ahead). Whoever holds the keeper key can stack updates with rising publish times in
   one transaction. Fix: store the on-chain time of the last update in the
   market and bound the move per minute. It needs a market account migration,
   so it is not in the hackathon build.
@@ -408,12 +289,9 @@ Said plainly, for the judges and for the audit that comes after.
 - **Devnet faucets are unlimited and borrowing has no per-market cap**, so
   anyone can borrow the pool dry with faucet collateral; the admin tops it up.
   Mainnet uses real tokens and needs debt ceilings per market.
-- **The CRE workflows run from the CRE CLI simulator** until Chainlink grants
-  Deploy Access, and the transmitter and keeper keys are hot. Between runs, an
-  always-on keeper on GitHub Actions (`.github/workflows/fallback-keeper.yml`)
-  prices every market from the xStock tokens themselves and runs the agents,
-  so the devnet demo never goes stale; with devnet's 7-day `max_age`, even an
-  outage of both only freezes prices.
+- **The keeper key is hot** and its prices are trusted, within the bounds
+  above, until the program verifies Data Streams reports on chain. With
+  devnet's 7-day `max_age`, a keeper outage only freezes prices.
 - **`initialize` is not tied to the upgrade authority** (it was called at
   deploy time); Earn liquidation repays the whole debt from the vault buffer;
   dust collateral left by a liquidation is not written off.
@@ -425,7 +303,7 @@ Said plainly, for the judges and for the audit that comes after.
 
 ```bash
 anchor build                      # or: cargo build-sbf --manifest-path programs/agama-solana/Cargo.toml
-./scripts/fetch-fixtures.sh && cargo test  # 16 LiteSVM flows, incl. CRE through Chainlink's forwarder
+cargo test                        # 14 LiteSVM flows
 ./scripts/check.sh                # everything CI runs, before pushing
 pnpm install
 pnpm setup                        # initialize, 10 markets, first prices, seed the pool (idempotent)
@@ -434,10 +312,8 @@ pnpm e2e:local                    # throwaway validator: setup, the e2e, the age
                                   # the real keeper with prices moved on purpose (17 checks),
                                   # then the private path (12 checks). VALIDATOR=agave 4.3+
 pnpm state                        # live pool, vault, prices and their age, positions, keeper
-./cre/run-devnet.sh               # one run of the CRE price workflow on devnet
-./cre/run-devnet.sh agama-agents  # one run of the CRE agents workflow
-pnpm keeper                       # fallback keeper, if CRE is down
-VALIDATOR=... ./cre/simulate-local.sh  # the workflow against a local validator
+pnpm keeper                       # the keeper: Data Streams prices and the agents
+pnpm tsx scripts/datastreams-check.ts  # the latest Data Streams report of every feed
 ```
 
 The LiteSVM suite (`programs/agama-solana/tests/flows.rs`) covers: Earn opening
@@ -466,9 +342,7 @@ signer, every click a real devnet transaction.
 | | Who | What |
 |---|---|---|
 | `initialize`, `add_market`, `set_params`, `set_market` | admin | Protocol, mints, pool and vault accounts; markets and their terms |
-| `on_report` | Chainlink Keystone Forwarder | CRE price reports, a few markets each; bounded |
-| `set_cre` | admin | Forwarder program and state; owner and name (production) or trusted transmitter (simulation) |
-| `push_price` | keeper | Fallback price path; same bounds |
+| `push_price` | keeper | A market's price, from Data Streams; bounded |
 | `faucet_usdc`, `faucet_stock` | anyone | Devnet funds |
 | `supply`, `withdraw` | lender | USDC in and out of the pool, LP token |
 | `earn_deposit`, `earn_set_target`, `earn_close` | owner | Open or top up at a level, move the slider, close |

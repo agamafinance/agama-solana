@@ -10,7 +10,7 @@ import {
   ago, borrowRateBps, ix, pct, px, qty, stockValue, usd, useSnapshot,
 } from '@/lib/solana/useSolana';
 import {
-  AgentsCard, AmountBox, card, Hero, CreBadge, MarketCards, Panel, parseAmount, primaryBtn, Row, secondaryBtn, SessionBadge,
+  AgentsCard, AmountBox, card, Hero, MarketCards, Panel, parseAmount, PriceBadge, primaryBtn, Row, secondaryBtn, SessionBadge,
   Stat, Step, toDecimal,
 } from '@/components/solana/ui';
 
@@ -136,7 +136,7 @@ export default function SolanaEarnPage() {
           <p className="text-[12px] text-[#b4571f]">Showing data from {ago(snap.at)}: the RPC is not answering, retrying.</p>
         )}
         {snap && <MarketCards markets={snap.markets} sel={sel} onSelect={setSel} connected={!!address} />}
-        {snap && <CreBadge cre={snap.cre} />}
+        {snap && <PriceBadge markets={snap.markets} />}
 
         <div className="grid gap-5 lg:grid-cols-[1fr_1fr] items-start">
           <div className={card}>
@@ -187,7 +187,7 @@ export default function SolanaEarnPage() {
             </dl>
             {m && !m.fresh && (
               <p className="mt-3 text-[12px] text-[#b4571f]">
-                No fresh price for {m.stock.ticker}: borrowing waits for the next one from the CRE workflow.
+                No fresh price for {m.stock.ticker}: borrowing waits for the next one.
               </p>
             )}
 
@@ -261,7 +261,7 @@ export default function SolanaEarnPage() {
                   }
                 >
                   The stock moves, the debt follows it back to {pct(position!.targetLtvBps)}. The vault yield above
-                  that debt is bought back as more stock. A Chainlink CRE workflow makes the calls every minute, and the
+                  that debt is bought back as more stock. A keeper makes the calls every minute, and the
                   calls are open to anyone: nothing here is yours to do, and nothing here is ours to control.
                 </AgentsCard>
                 <p className="mt-3 text-[12px] text-fg-muted">
@@ -280,11 +280,10 @@ export default function SolanaEarnPage() {
         </div>
 
         <p className="text-[12px] text-fg-muted">
-          Devnet: the stocks, GLDY and USDC are stand-ins minted straight into your private balance by the Faucet
-          tab; no xStock or GLDY faucet exists on devnet, and GLDY itself is permissioned. Prices are real: a Chainlink
-          CRE workflow prices the shares off Chainlink Data Streams, checked against the live xStock tokens on Jupiter
-          and the DEXs, and GLDY off Orca&apos;s pool checked against Data Streams gold. Swaps settle at that price
-          minus 5 bps.
+          Devnet: the stocks, XAUt0 and USDC are stand-ins minted straight into your private balance by the Faucet
+          tab; no xStock or XAUt0 faucet exists on devnet. Prices are real: Chainlink Data Streams for the shares,
+          checked against the live xStock tokens on Jupiter and the DEXs, and Data Streams XAU/USD for gold, checked
+          against XAUt0. Swaps settle at that price minus 5 bps.
         </p>
       </Panel>
     </>

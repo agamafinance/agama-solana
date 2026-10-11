@@ -2024,70 +2024,6 @@ export type AgamaSolana = {
       ]
     },
     {
-      "name": "onReport",
-      "docs": [
-        "The Chainlink CRE receiver. The forwarder calls this after verifying",
-        "the DON's signatures (the mock forwarder after nothing: then the",
-        "transmitter is checked instead). The markets to price follow `cre` and",
-        "the instructions sysvar in the accounts. Same bounds as the keeper."
-      ],
-      "discriminator": [
-        214,
-        173,
-        18,
-        221,
-        173,
-        148,
-        151,
-        208
-      ],
-      "accounts": [
-        {
-          "name": "state"
-        },
-        {
-          "name": "forwarderAuthority",
-          "signer": true
-        },
-        {
-          "name": "cre",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  114,
-                  101,
-                  46,
-                  118,
-                  51
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "instructions",
-          "docs": [
-            "to check who transmitted the report."
-          ],
-          "address": "Sysvar1nstructions1111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "metadata",
-          "type": "bytes"
-        },
-        {
-          "name": "report",
-          "type": "bytes"
-        }
-      ]
-    },
-    {
       "name": "poke",
       "docs": [
         "Accrue interest and vault yield. Anyone, any time."
@@ -2358,89 +2294,6 @@ export type AgamaSolana = {
         }
       ],
       "args": []
-    },
-    {
-      "name": "setCre",
-      "docs": [
-        "Point the receiver at a forwarder deployment and, optionally, pin the",
-        "workflow owner."
-      ],
-      "discriminator": [
-        223,
-        241,
-        141,
-        205,
-        154,
-        11,
-        101,
-        18
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "protocol"
-          ]
-        },
-        {
-          "name": "protocol",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  114,
-                  111,
-                  116,
-                  111,
-                  99,
-                  111,
-                  108,
-                  46,
-                  118,
-                  50
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "cre",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  114,
-                  101,
-                  46,
-                  118,
-                  51
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "params",
-          "type": {
-            "defined": {
-              "name": "creParams"
-            }
-          }
-        }
-      ]
     },
     {
       "name": "setMarket",
@@ -2957,19 +2810,6 @@ export type AgamaSolana = {
   ],
   "accounts": [
     {
-      "name": "creConfig",
-      "discriminator": [
-        223,
-        155,
-        135,
-        163,
-        37,
-        82,
-        124,
-        78
-      ]
-    },
-    {
       "name": "market",
       "discriminator": [
         219,
@@ -3063,19 +2903,6 @@ export type AgamaSolana = {
       ]
     },
     {
-      "name": "creReportReceived",
-      "discriminator": [
-        47,
-        189,
-        143,
-        54,
-        90,
-        97,
-        15,
-        198
-      ]
-    },
-    {
       "name": "earnClosed",
       "discriminator": [
         53,
@@ -3125,19 +2952,6 @@ export type AgamaSolana = {
         94,
         115,
         118
-      ]
-    },
-    {
-      "name": "priceSkipped",
-      "discriminator": [
-        75,
-        158,
-        73,
-        63,
-        232,
-        197,
-        199,
-        244
       ]
     },
     {
@@ -3272,36 +3086,6 @@ export type AgamaSolana = {
       "code": 6020,
       "name": "withdrawTooLarge",
       "msg": "Too many LP shares for the pool's free cash"
-    },
-    {
-      "code": 6021,
-      "name": "invalidForwarder",
-      "msg": "Report did not come through the configured Chainlink forwarder"
-    },
-    {
-      "code": 6022,
-      "name": "invalidForwarderAuthority",
-      "msg": "forwarder_authority is not the forwarder's PDA for this state and program"
-    },
-    {
-      "code": 6023,
-      "name": "invalidWorkflowOwner",
-      "msg": "Report comes from another workflow owner"
-    },
-    {
-      "code": 6024,
-      "name": "invalidReport",
-      "msg": "Report metadata or payload could not be decoded"
-    },
-    {
-      "code": 6025,
-      "name": "marketNotInReport",
-      "msg": "No market in the accounts for a symbol in the report"
-    },
-    {
-      "code": 6026,
-      "name": "invalidTransmitter",
-      "msg": "Simulation report not sent by the trusted transmitter"
     }
   ],
   "types": [
@@ -3401,158 +3185,6 @@ export type AgamaSolana = {
           {
             "name": "amount",
             "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "creConfig",
-      "docs": [
-        "Where Chainlink CRE reports may come from. The Keystone Forwarder verifies",
-        "the DON's signatures, then CPIs `on_report` signed by a PDA of",
-        "`[\"forwarder\", forwarder_state, this program]`; the receiver checks that PDA",
-        "and the workflow owner in the metadata."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "forwarderProgram",
-            "type": "pubkey"
-          },
-          {
-            "name": "forwarderState",
-            "type": "pubkey"
-          },
-          {
-            "name": "workflowOwner",
-            "docs": [
-              "EVM-style address of the workflow owner, as CRE puts it in the",
-              "metadata. Required outside simulation: the Keystone Forwarder proves",
-              "the DON signed a report, not which customer's workflow produced it."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                20
-              ]
-            }
-          },
-          {
-            "name": "workflowName",
-            "docs": [
-              "The workflow name as CRE puts it in the metadata (10 bytes). Pinned",
-              "with the owner outside simulation."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                10
-              ]
-            }
-          },
-          {
-            "name": "simulation",
-            "docs": [
-              "True while the forwarder is the CLI's mock, which relays anything",
-              "without checking signatures. Reports are then accepted only when the",
-              "transaction's transmitter (the key running the simulator) is this one."
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "transmitter",
-            "type": "pubkey"
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          },
-          {
-            "name": "reports",
-            "type": "u64"
-          },
-          {
-            "name": "lastReportAt",
-            "type": "i64"
-          },
-          {
-            "name": "lastPriceAt",
-            "docs": [
-              "Last time a report actually moved a price: the liveness the app shows."
-            ],
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "creParams",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "forwarderProgram",
-            "type": "pubkey"
-          },
-          {
-            "name": "forwarderState",
-            "type": "pubkey"
-          },
-          {
-            "name": "workflowOwner",
-            "type": {
-              "array": [
-                "u8",
-                20
-              ]
-            }
-          },
-          {
-            "name": "workflowName",
-            "type": {
-              "array": [
-                "u8",
-                10
-              ]
-            }
-          },
-          {
-            "name": "simulation",
-            "type": "bool"
-          },
-          {
-            "name": "transmitter",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "creReportReceived",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "workflowOwner",
-            "type": {
-              "array": [
-                "u8",
-                20
-              ]
-            }
-          },
-          {
-            "name": "simulation",
-            "type": "bool"
-          },
-          {
-            "name": "report",
-            "type": {
-              "defined": {
-                "name": "priceReport"
-              }
-            }
           }
         ]
       }
@@ -3849,88 +3481,6 @@ export type AgamaSolana = {
           {
             "name": "market",
             "type": "pubkey"
-          },
-          {
-            "name": "priceE8",
-            "type": "u64"
-          },
-          {
-            "name": "publishTime",
-            "type": "i64"
-          },
-          {
-            "name": "sessionOpen",
-            "type": "bool"
-          }
-        ]
-      }
-    },
-    {
-      "name": "priceReport",
-      "docs": [
-        "The Borsh payload a CRE workflow writes: a few markets per report, since a",
-        "Solana transaction leaves the forwarder ~265 bytes once accounts are paid."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "updates",
-            "type": {
-              "vec": {
-                "defined": {
-                  "name": "priceUpdate"
-                }
-              }
-            }
-          }
-        ]
-      }
-    },
-    {
-      "name": "priceSkipped",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "market",
-            "type": "pubkey"
-          },
-          {
-            "name": "priceE8",
-            "type": "u64"
-          },
-          {
-            "name": "publishTime",
-            "type": "i64"
-          },
-          {
-            "name": "currentPriceE8",
-            "type": "u64"
-          },
-          {
-            "name": "currentPublishTime",
-            "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "priceUpdate",
-      "docs": [
-        "One price in a CRE report."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "symbol",
-            "type": {
-              "array": [
-                "u8",
-                8
-              ]
-            }
           },
           {
             "name": "priceE8",

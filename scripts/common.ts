@@ -6,6 +6,7 @@ import path from "path";
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { FEEDS, latestReports } from "./datastreams";
 
 /// RPCs in order of preference (SOLANA_RPCS, comma separated, or SOLANA_RPC):
 /// every call fails over to the next one on a rate limit, a 5xx, a timeout or a
@@ -56,9 +57,8 @@ export function symbolBytes(sym: string): number[] {
 
 /// The markets. xStocks keep the X Layer terms (a loop at L carries an LTV of
 /// (L - 1) / L: 1.43x on TSLA and NVDA, 1.54x on AAPL, 2x on SPY and QQQ) and
-/// track their mainnet xStock. GLDY is Streamex's gold-backed token (about one
-/// ounce each, priced off Orca's GLDY/USDC pool): gold moves less, so it lends
-/// at 60%.
+/// track their mainnet xStock. XAU tracks XAUt0 (Tether Gold on Solana, one
+/// ounce per token): gold moves less, so it lends at 60%.
 export const MARKETS = [
   { symbol: "TSLA", ltv: 3000, lt: 4000, kind: "xstock", xstock: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB" },
   { symbol: "NVDA", ltv: 3000, lt: 4000, kind: "xstock", xstock: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh" },
@@ -69,17 +69,8 @@ export const MARKETS = [
   { symbol: "MSFT", ltv: 3500, lt: 4500, kind: "xstock", xstock: "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX" },
   { symbol: "AMZN", ltv: 3500, lt: 4500, kind: "xstock", xstock: "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg" },
   { symbol: "META", ltv: 3000, lt: 4000, kind: "xstock", xstock: "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu" },
-  { symbol: "GLDY", ltv: 6000, lt: 7000, kind: "gold", orcaPool: "7z9ijqqafMPUuGKGRBq8BtC6AFzXX4PfKPy2ijbGmby3" },
+  { symbol: "XAU", ltv: 6000, lt: 7000, kind: "gold", xstock: "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P" },
 ] as const;
-
-/// Chainlink CRE forwarders on devnet: the CLI's mock (what `cre workflow
-/// simulate --broadcast` relays through, no signature check) and the live
-/// Keystone Forwarder (DON signatures verified).
-export const CRE_FORWARDERS = {
-  simulation: { program: "7kuEAA3mSC1Tz8gQjnvH7bKFda9xSPRRin9SZbH49cNK", state: "5Tipz3yhTBdVsDbaBxZkrp7Gjf3brGq5SKkxReefPMP7" },
-  production: { program: "CXsKEJcs25TQEYU2e5jZ8QTPE3ffMLZhH6BWHrdcCCB5", state: "8QoomCQyPSkJ8WopJbX9B4HyvrFzziwvJdU8hZE6DCr9" },
-} as const;
-export const crePda = pda(seed("cre.v3"));
 
 export function marketAccounts(symbol: string) {
   const stockMint = pda(seed("stock.v2"), Buffer.from(symbolBytes(symbol)));
@@ -149,46 +140,128 @@ export function nyseOpen(at = new Date()): boolean {
 
 export type Quote = { symbol: string; priceE8: bigint; publishTime: number; sessionOpen: boolean; source: string };
 
-export async function fetchQuotes(): Promise<Quote[]> {
-  const xs = MARKETS.filter((m) => m.kind === "xstock") as readonly { symbol: string; xstock: string }[];
-  const ids = xs.map((m) => m.xstock).join(",");
-  const res = await fetch(`https://lite-api.jup.ag/price/v3?ids=${ids}`);
-  if (!res.ok) throw new Error(`jupiter price ${res.status}`);
-  const body = (await res.json()) as Record<string, any>;
-  const open = nyseOpen();
-  const now = Math.floor(Date.now() / 1000);
-  const out: Quote[] = [];
-  for (const m of xs) {
-    const q = body[m.xstock];
-    if (!q) continue;
-    const share = q.stockData?.price as number | undefined;
-    const shareTime = q.stockData?.updatedAt ? Math.floor(Date.parse(q.stockData.updatedAt) / 1000) : 0;
-    const useShare = open && share && now - shareTime < 300;
-    const price = useShare ? share! : (q.usdPrice as number);
-    if (!price || !(price > 0)) continue;
-    out.push({
-      symbol: m.symbol,
-      priceE8: BigInt(Math.round(price * 1e8)),
-      publishTime: useShare ? Math.min(shareTime, now) : now,
-      sessionOpen: !!useShare,
-      source: useShare ? "share (NYSE session)" : "xStock token on Solana",
-    });
+/// Two sources must agree within this band to be trusted (bps).
+const SOURCE_BAND_BPS = 200;
+/// Gold's references (Data Streams, gold spot, XAUt0) within this band (bps).
+const GOLD_BAND_BPS = 300;
+/// A Data Streams report or a share print older than this is not a price (s).
+const MAX_AGE_S = 120;
+
+const near = (x: number, y: number, bps: number) => x > 0 && y > 0 && Math.abs(x / y - 1) * 10_000 <= bps;
+
+/** Each source on its own: one failing must not take the others down. */
+async function settle<T>(p: Promise<T>, fallback: T, what: string): Promise<T> {
+  try {
+    return await p;
+  } catch (e: any) {
+    console.log(new Date().toISOString(), `${what} unavailable: ${e.message?.split("\n")[0] ?? e}`);
+    return fallback;
   }
-  // GLDY: Orca's GLDY/USDC whirlpool, guarded by the gold spot price.
-  for (const m of MARKETS.filter((m) => m.kind === "gold") as readonly { symbol: string; orcaPool: string }[]) {
-    try {
-      const pool = (await (await fetch(`https://api.orca.so/v2/solana/pools/${m.orcaPool}`)).json()).data;
-      const spot = Number((await (await fetch("https://api.gold-api.com/price/XAU")).json()).price) || 0;
-      const sqrt = Number(BigInt(pool.sqrtPrice)) / 2 ** 64;
-      const usdcPerGldy = 1 / (sqrt * sqrt * 10 ** (6 - 9));
-      const usePool = spot > 0 && Math.abs(usdcPerGldy / spot - 1) < 0.03;
-      const price = usePool ? usdcPerGldy : spot;
-      if (!(price > 0)) continue;
-      const ny = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-      const d = ny.getDay(), min = ny.getHours() * 60 + ny.getMinutes();
-      const goldOpen = d === 6 ? false : d === 0 ? min >= 18 * 60 : d === 5 ? min < 17 * 60 : true;
-      out.push({ symbol: m.symbol, priceE8: BigInt(Math.round(price * 1e8)), publishTime: now, sessionOpen: goldOpen, source: usePool ? "Orca GLDY pool" : "gold spot" });
-    } catch {}
+}
+
+const json = async (url: string) => {
+  const r = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  if (!r.ok) throw new Error(`${url.split("?")[0]} ${r.status}`);
+  return r.json();
+};
+
+/// Gold trades Sunday 18:00 to Friday 17:00, New York time.
+function goldOpen(at = new Date()): boolean {
+  const ny = new Date(at.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const d = ny.getDay(), min = ny.getHours() * 60 + ny.getMinutes();
+  return d === 6 ? false : d === 0 ? min >= 18 * 60 : d === 5 ? min < 17 * 60 : true;
+}
+
+/// The price of every market, from Chainlink Data Streams checked against the
+/// tokens themselves:
+///   shares  the Data Streams feed of the live session (regular, pre/post,
+///           overnight, as its marketStatus says) leads when the token agrees;
+///           else the share print while NYSE trades; else the token. The token
+///           is Jupiter and the deepest DEX pair averaged, and when those two
+///           disagree the market keeps its last price.
+///   gold    Data Streams XAU/USDT x USDT/USD, when gold spot and XAUt0 agree
+///           with it; else XAUt0 guarded by gold spot; else gold spot.
+export async function fetchQuotes(): Promise<Quote[]> {
+  const mints = MARKETS.map((m) => m.xstock);
+  const ids = Object.values(FEEDS).flatMap((f) => Object.values(f));
+  const [jup, dexPairs, streams, spotBody] = await Promise.all([
+    settle(json(`https://lite-api.jup.ag/price/v3?ids=${mints.join(",")}`), {} as Record<string, any>, "Jupiter"),
+    settle(json(`https://api.dexscreener.com/tokens/v1/solana/${mints.join(",")}`), [] as any[], "DexScreener"),
+    settle(latestReports(ids), new Map(), "Data Streams"),
+    settle(json("https://api.gold-api.com/price/XAU"), {} as any, "gold spot"),
+  ]);
+  const now = Math.floor(Date.now() / 1000);
+  const fresh = (r?: { observedAt: number; expiresAt: number }) => !!r && now - r.observedAt <= MAX_AGE_S && r.expiresAt >= now;
+  const stream = (id?: string) => (id ? streams.get(id.toLowerCase()) : undefined);
+  // The deepest pair per token: USDC when there is one, else any pair priced in USD.
+  const dex = (mint: string) => {
+    let best = 0, liq = 0, usdc = false;
+    for (const p of dexPairs) {
+      if (p.baseToken?.address !== mint) continue;
+      const isUsdc = p.quoteToken?.symbol === "USDC";
+      const l = Number(p.liquidity?.usd) || 0;
+      if ((isUsdc && !usdc) || (isUsdc === usdc && l > liq)) {
+        best = Number(p.priceUsd) || 0;
+        liq = l;
+        usdc = isUsdc;
+      }
+    }
+    return best;
+  };
+  const token = (mint: string): { price: number; source: string } | undefined => {
+    const a = Number(jup[mint]?.usdPrice) || 0;
+    const d = dex(mint);
+    if (a > 0 && d > 0) return near(a, d, SOURCE_BAND_BPS) ? { price: (a + d) / 2, source: "Jupiter + DEX" } : undefined;
+    if (a > 0) return { price: a, source: "Jupiter only" };
+    if (d > 0) return { price: d, source: "DEX only" };
+    return undefined;
+  };
+  const skip = (msg: string) => console.log(new Date().toISOString(), `skip ${msg}`);
+  const out: Quote[] = [];
+  const push = (symbol: string, price: number, publishTime: number, sessionOpen: boolean, source: string) =>
+    out.push({ symbol, priceE8: BigInt(Math.round(price * 1e8)), publishTime: Math.min(publishTime, now), sessionOpen, source });
+
+  for (const m of MARKETS) {
+    const t = token(m.xstock);
+    const f = FEEDS[m.symbol] ?? {};
+    if (m.kind === "xstock") {
+      if (!t) {
+        skip(`${m.symbol}: no token price, or Jupiter and DEX disagree`);
+        continue;
+      }
+      const reg = stream(f.regular), ext = stream(f.extended), ovn = stream(f.overnight);
+      // marketStatus says which session is live; never the timestamps.
+      const live = reg?.marketStatus === 2 ? reg : ext && (ext.marketStatus === 1 || ext.marketStatus === 3) ? ext : ovn?.marketStatus === 4 ? ovn : undefined;
+      if (live && fresh(live) && live.mid > 0) {
+        if (near(live.mid, t.price, (3 * SOURCE_BAND_BPS) / 2)) {
+          const label = ["", "pre-market", "regular", "post-market", "overnight"][live.marketStatus];
+          push(m.symbol, live.mid, live.observedAt, live.marketStatus === 2, `Data Streams ${label}, token ${t.source}`);
+          continue;
+        }
+        skip(`${m.symbol}: Data Streams ${live.mid.toFixed(2)} vs token ${t.price.toFixed(2)}, falling back`);
+      }
+      const q = jup[m.xstock];
+      const share = Number(q?.stockData?.price) || 0;
+      const shareAt = q?.stockData?.updatedAt ? Math.floor(Date.parse(q.stockData.updatedAt) / 1000) : 0;
+      if (nyseOpen() && share > 0 && now - shareAt < MAX_AGE_S && near(share, t.price, (3 * SOURCE_BAND_BPS) / 2)) push(m.symbol, share, shareAt, true, `share, token ${t.source}`);
+      else push(m.symbol, t.price, now, false, `token, ${t.source}`);
+    } else {
+      const open = goldOpen();
+      const x = stream(f.xau), u = stream(f.usdt);
+      const ds = x && u && fresh(x) && fresh(u) ? x.mid * u.mid : 0;
+      const spot = Number(spotBody.price) || 0;
+      if (ds > 0 && (spot <= 0 || near(ds, spot, GOLD_BAND_BPS))) {
+        if (t && !near(t.price, ds, GOLD_BAND_BPS)) {
+          skip(`${m.symbol}: XAUt0 ${t.price.toFixed(2)} vs Data Streams ${ds.toFixed(2)}`);
+          continue;
+        }
+        push(m.symbol, ds, Math.min(x!.observedAt, u!.observedAt), open, t ? `Data Streams XAU/USD, XAUt0 ${t.source}` : "Data Streams XAU/USD");
+        continue;
+      }
+      if (ds > 0) skip(`${m.symbol}: Data Streams ${ds.toFixed(2)} vs spot ${spot.toFixed(2)}, falling back`);
+      if (t && near(t.price, spot, GOLD_BAND_BPS)) push(m.symbol, t.price, now, open, `XAUt0 ${t.source}, gold spot`);
+      else if (spot > 0) push(m.symbol, spot, now, open, "gold spot");
+    }
   }
   return out;
 }

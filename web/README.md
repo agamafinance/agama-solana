@@ -24,7 +24,7 @@ lib/solana/
 components/solana/   cards, rows, market picker, agents card, privacy bar
 ```
 
-Reads are one `getMultipleAccounts` per refresh (protocol, ten markets, LP mint, the CRE receiver, and the
+Reads are one `getMultipleAccounts` per refresh (protocol, ten markets, LP mint, and the
 wallet's twenty possible positions and eleven token accounts), decoded with the IDL and accrued forward to
 now with the program's own rate model. While the RPC fails, the last snapshot stays on screen with its age
 and the reads back off up to two minutes. Writes are signed by the wallet and sent by the app, never by the
@@ -60,10 +60,10 @@ transaction that fails on chain stops the batch with the step that failed and th
 
 ## Honest about devnet
 
-The stocks, GLDY and USDC are stand-ins minted by the program. Prices come from a Chainlink CRE workflow
-reading the live xStocks (the share price while NYSE trades, the token's own price outside it, when LTVs
-drop by the 5% off-hours buffer) and Orca's GLDY pool; it runs through the CRE simulator and Chainlink's
-devnet mock forwarder, which the badge says. Swaps settle at the oracle price minus 5 bps.
+The stocks, XAUt0 and USDC are stand-ins minted by the program. Prices are real: the keeper reads Chainlink
+Data Streams (the share in its live session, regular, extended or overnight, and XAU/USD for gold), checks
+them against the live xStock tokens and XAUt0 on Jupiter and the DEXs, and writes them on chain. Swaps
+settle at the oracle price minus 5 bps.
 
 ## Run it
 
