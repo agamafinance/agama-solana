@@ -10,16 +10,13 @@ against it, puts the USDC to work in the Agama private credit vault, and
 permissionless agents turn the yield back into **more of the stock**. What
 grows is your share count, not a stablecoin balance.
 
-## TOKEN2049 Origins Hackathon
+## Try it
 
 | | |
 |---|---|
 | Demo video | https://youtu.be/M5GXPA1J31w (2:22) |
-| Live app | https://app.agama.finance/solana (Solana devnet, Phantom) |
+| Live app | https://app.agama.finance/solana (Solana devnet; Phantom, Backpack or Solflare) |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) on **devnet** |
-| Example transaction | [CRE price report, Data Streams priced, written by the CRE CLI simulator (TEE and DON simulated) through Chainlink's devnet mock forwarder](https://explorer.solana.com/tx/2uzp2YfeoBrctTT8QLnJz96APhrqMQGraxK8baSnYDondFXhPRL5QxiCC6efFPBshFh4pzyYmUz6ZBkv85FZqnzG?cluster=devnet) |
-| CRE evidence | [docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md): CLI output of both Confidential Workflows (TEE) |
-| Tracks | Solana: Best Use of Solana; Chainlink: Best workflow with CRE |
 
 **Try it without help.** Open the app with Phantom set to devnet (a little
 devnet SOL from faucet.solana.com pays the fees), hit **Faucet** (USDC, the nine
@@ -28,10 +25,31 @@ stock, an amount and a level, deposit. Your position appears with its borrow,
 its vault share and the agents keeping it on target; **Amplify** loops a stock
 to a multiple; **Portfolio** decrypts your private balances on demand.
 
-**What was built during the hackathon, and what existed before.** Every line
+## Why Solana
+
+- **The core logic is on chain, in one Anchor program.** Positions are PDAs
+  seeded by owner, market and product; the lending pool, the private credit
+  vault, borrowing, liquidation, bad debt and price bounds are all program
+  rules. `earn_deposit` borrows and fills the vault in one instruction,
+  `amplify_open` borrows and buys more of the same stock in one instruction.
+- **Private by default, natively.** Every token is a Token-2022 mint with the
+  confidential transfer extension: balances and transfer amounts are ElGamal
+  ciphertexts, and the zero knowledge proofs are verified on chain by Solana's
+  ZK ElGamal proof program. A stranger reads zero.
+- **The assets are already here.** xStocks and gold tokens are native Token-2022
+  tokens on Solana, trading around the clock. On mainnet the swap leg is a
+  Jupiter route.
+- **Agents need cheap, fast blocks.** `rebalance`, `compound` and `liquidate`
+  are permissionless; at Solana fees and finality, keeping every position on
+  target minute by minute is viable for anyone.
+- **Tested like a program, not a demo.** 16 LiteSVM flows, end to end runs on a
+  local validator and on devnet, and a browser end to end on the live app.
+
+**What was built, and when.** Every line
 of this repository (the Anchor program, the Token-2022 confidential balance
 flows, both CRE workflows, the Data Streams integration, the web app and the
-tests) was written during the hackathon, on 6 and 7 October 2026. The first
+tests) was written on 6 and 7 October 2026, at TOKEN2049 Origins, where it placed
+second on the Solana track. The first
 commit lands the program and its tests in one piece (they were iterated
 locally before the repository was created); the program's first transaction on
 devnet is from 6 October, 05:00 UTC. The product design is not new: it is the one Agama shipped on
@@ -109,8 +127,8 @@ flowchart TB
 - **The buffer goes before the liquidator.** `liquidate` first repays out of
   the position's vault shares; only if that does not restore health does the
   liquidator repay half the debt and take stock at a 5% bonus.
-- **Priced by Chainlink CRE, around the clock, honestly.** A CRE workflow
-  prices every market (see below). In NYSE session it takes the share price;
+- **Priced around the clock, honestly.** Chainlink Data Streams, the xStocks'
+  own data provider, price every market (see below). In NYSE session it takes the share price;
   outside it, the xStock token's own price on Solana, flagged off-hours so LTV
   and threshold both tighten by 5 points. A price moves 15% at most per
   update, publish times only move forward, and only a stale price stops a
@@ -129,7 +147,49 @@ to pass the exact swap amount and calldata, with an on-chain slippage floor
 against griefing; here the swap is priced inside the instruction off the same
 oracle, so an agent has nothing to choose and nothing to skim.
 
-## Chainlink CRE: prices and agents
+## Confidential balances
+
+Every token Agama mints (USDC, the nine xStocks, GLDY, the LP token) is a Token-2022
+mint with the **confidential transfer extension**. A holder can move any of
+them into an encrypted balance and send them to anyone without the amount ever
+appearing on chain: balances and transfer amounts are ElGamal ciphertexts, and
+the ZK proofs that keep them honest (no negative balances, no minted value)
+are checked on chain by Solana's ZK ElGamal proof program.
+
+| | Public | Private |
+|---|---|---|
+| What you hold of each token | | encrypted, only your keys read it |
+| Sending to someone else | | amount hidden from everyone but the two of you |
+| Depositing into Earn, Amplify | amount visible | |
+| What comes back on close or withdraw | amount visible, then shielded again | |
+| Positions (collateral, debt, target) | program state, readable by anyone | |
+
+A program cannot price a loan it cannot read, so positions stay public: what
+the encryption hides is everything around them, how much you hold, where it
+goes, who you pay. The mints have no auditor key and no authority that could
+add one later.
+
+- **Keys.** Derived from one wallet signature over `solana-conf-bal/v1`, the
+  standard every Token-2022 client uses, so the same wallet reads the same
+  balances in any app.
+- **Cost.** Shielding is one transaction (deposit and apply together, the new
+  readable balance computed client-side; two the first time a token is set
+  up). A private send is five and an unshield four: the range and equality proofs do not fit in one
+  transaction, so they are verified into context accounts first and closed
+  afterwards, rent back.
+- **Rounding never reaches the wallet.** A holder whose USDC is all private has
+  zero public USDC, so `earn_close` writes off a rounding gap of up to 0.0001
+  USDC between the vault shares and the debt instead of asking the wallet for it.
+- **Tooling.** Proofs come from `@solana/zk-sdk` (Anza's WASM build of
+  `solana-zk-sdk`) through the Kit client `@solana-program/token-2022/confidential`.
+  Local validators need agave 4.3 or later (3.1 rejects these proofs) and
+  devnet's Token-2022 build (the genesis copy predates the instruction layout).
+
+`pnpm private-e2e` runs it: shield, private sends, a stranger's view, unshield
+into Earn, close and shield back, lend from private, every balance decrypted
+and checked exactly.
+
+## Prices and agents: Chainlink Data Streams through CRE
 
 Two Chainlink Runtime Environment workflows run the protocol. `agama-prices`
 prices the markets; `agama-agents` runs the agents. The keeper script stays
@@ -282,53 +342,16 @@ The old keeper (`scripts/keeper.ts`) stays as a fallback: its agent calls are
 permissionless, its `push_price` needs the keeper key and is bounded the same
 way as a CRE report.
 
-## Confidential balances
+### CRE evidence
 
-Every token Agama mints (USDC, the nine xStocks, GLDY, the LP token) is a Token-2022
-mint with the **confidential transfer extension**. A holder can move any of
-them into an encrypted balance and send them to anyone without the amount ever
-appearing on chain: balances and transfer amounts are ElGamal ciphertexts, and
-the ZK proofs that keep them honest (no negative balances, no minted value)
-are checked on chain by Solana's ZK ElGamal proof program.
-
-| | Public | Private |
-|---|---|---|
-| What you hold of each token | | encrypted, only your keys read it |
-| Sending to someone else | | amount hidden from everyone but the two of you |
-| Depositing into Earn, Amplify | amount visible | |
-| What comes back on close or withdraw | amount visible, then shielded again | |
-| Positions (collateral, debt, target) | program state, readable by anyone | |
-
-A program cannot price a loan it cannot read, so positions stay public: what
-the encryption hides is everything around them, how much you hold, where it
-goes, who you pay. The mints have no auditor key and no authority that could
-add one later.
-
-- **Keys.** Derived from one wallet signature over `solana-conf-bal/v1`, the
-  standard every Token-2022 client uses, so the same wallet reads the same
-  balances in any app.
-- **Cost.** Shielding is one transaction (deposit and apply together, the new
-  readable balance computed client-side; two the first time a token is set
-  up). A private send is five and an unshield four: the range and equality proofs do not fit in one
-  transaction, so they are verified into context accounts first and closed
-  afterwards, rent back.
-- **Rounding never reaches the wallet.** A holder whose USDC is all private has
-  zero public USDC, so `earn_close` writes off a rounding gap of up to 0.0001
-  USDC between the vault shares and the debt instead of asking the wallet for it.
-- **Tooling.** Proofs come from `@solana/zk-sdk` (Anza's WASM build of
-  `solana-zk-sdk`) through the Kit client `@solana-program/token-2022/confidential`.
-  Local validators need agave 4.3 or later (3.1 rejects these proofs) and
-  devnet's Token-2022 build (the genesis copy predates the instruction layout).
-
-`pnpm private-e2e` runs it: shield, private sends, a stranger's view, unshield
-into Earn, close and shield back, lend from private, every balance decrypted
-and checked exactly.
+Terminal output of both workflows, with the devnet transactions they wrote:
+[docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md).
 
 ## Where it lives
 
 | | |
 |---|---|
-| Status | Live on devnet: Token-2022 with confidential balances, priced and run by Chainlink CRE. At each deploy the on-chain bytes were dumped and compared to the local build. |
+| Status | Live on devnet: Token-2022 with confidential balances, priced by Chainlink Data Streams, kept fresh by an always-on keeper. At each deploy the on-chain bytes were dumped and compared to the local build. |
 | Program | [`6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D`](https://explorer.solana.com/address/6YdZN72p68ynpGH1SwZ86EseFokch6zPAQPAq9NxPY7D?cluster=devnet) (devnet) |
 | Every address | [`deployments/devnet.json`](deployments/devnet.json) |
 | IDL | [`idl/agama_solana.json`](idl/agama_solana.json) |
@@ -362,11 +385,6 @@ and checked exactly.
   cross-check. Orca's API answers 403 to the CRE HTTP client, so GLDY is read
   from the whirlpool account itself.
 
-## CRE evidence
-
-Terminal output of both workflows, with the devnet transactions they wrote:
-[docs/CRE-EVIDENCE.md](docs/CRE-EVIDENCE.md).
-
 ## Known limitations
 
 Said plainly, for the judges and for the audit that comes after.
@@ -384,10 +402,12 @@ Said plainly, for the judges and for the audit that comes after.
 - **Devnet faucets are unlimited and borrowing has no per-market cap**, so
   anyone can borrow the pool dry with faucet collateral; the admin tops it up.
   Mainnet uses real tokens and needs debt ceilings per market.
-- **Prices and agents run from one machine** (the CRE CLI simulator) until
-  Chainlink grants Deploy Access; the transmitter and keeper keys are hot. If
-  that machine is offline for more than 10 minutes, prices go stale and the
-  program refuses new borrows and agent actions, by design.
+- **The CRE workflows run from the CRE CLI simulator** until Chainlink grants
+  Deploy Access, and the transmitter and keeper keys are hot. Between runs, an
+  always-on keeper on GitHub Actions (`.github/workflows/fallback-keeper.yml`)
+  prices every market from the xStock tokens themselves and runs the agents,
+  so the devnet demo never goes stale. If both stop for more than 10 minutes,
+  the program refuses new borrows and agent actions, by design.
 - **`initialize` is not tied to the upgrade authority** (it was called at
   deploy time); Earn liquidation repays the whole debt from the vault buffer;
   dust collateral left by a liquidation is not written off.
