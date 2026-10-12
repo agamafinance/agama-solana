@@ -130,7 +130,7 @@ export function PriceBadge({ markets }: { markets: { priceTime: number }[] }) {
         Chainlink Data Streams
       </span>
       <span>
-        Every price is a signed Chainlink report, verified on chain. Last price {ageText}.
+        Every price is a signed Chainlink Data Streams report, verified on chain by Chainlink&apos;s Verifier. Last price {ageText}.
       </span>
     </div>
   );
