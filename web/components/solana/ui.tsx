@@ -130,9 +130,7 @@ export function PriceBadge({ markets }: { markets: { priceTime: number }[] }) {
         Chainlink Data Streams
       </span>
       <span>
-        Every price is a signed Chainlink Data Streams report, verified on chain by Chainlink&apos;s Verifier before the program applies it:
-        each share in its live session (regular, extended or overnight, the last close when the market is shut), gold as XAU/USDT x
-        USDT/USD. Anyone can bring a report; nobody can choose the price. Last price written {ageText}.
+        Every price is a signed Chainlink report, verified on chain. Last price {ageText}.
       </span>
     </div>
   );
